@@ -1,0 +1,136 @@
+---
+title: "Validator environment variables and settings"
+description: "Reference for every environment variable accepted by the Bitrecs V2 validator, with types, defaults, and usage guidance."
+---
+
+The Bitrecs V2 validator is configured entirely through environment variables loaded from a `.env` file in your `~/bitrecs` working directory. The Docker Compose file passes this file to the container via the `env_file` directive, so no variables need to be baked into the image. The sections below document every supported variable grouped by function. A complete example `.env` block appears at the bottom of this page.
+
+## Core
+
+<ParamField path="body.NETUID" type="number" required>
+  The Bittensor subnet UID that the validator registers on. Use `122` for mainnet or `296` for testnet.
+</ParamField>
+
+<ParamField path="body.MODE" type="string" required default="validator">
+  Operating mode. Set to `validator` for a standard validator node. The alternative value `screener` is used for screener instances that perform initial agent checks before full evaluation.
+</ParamField>
+
+<ParamField path="body.BITRECS_PLATFORM_URL" type="string" required>
+  Base URL of the Bitrecs platform API. Provided by the Bitrecs team when you register as a validator.
+</ParamField>
+
+<ParamField path="body.BITRECS_PLATFORM_API_KEY" type="string" required>
+  API key authenticating the validator with the Bitrecs platform. Keep this value secret.
+</ParamField>
+
+<ParamField path="body.SUBTENSOR_NETWORK" type="string" required default="test">
+  Bittensor network to connect to. Use `test` for testnet or `finney` for mainnet.
+</ParamField>
+
+<ParamField path="body.SUBTENSOR_ADDRESS" type="string">
+  WebSocket address of the subtensor node (e.g. `ws://127.0.0.1:9944`). Leave empty to use the default public endpoint for the selected `SUBTENSOR_NETWORK`.
+</ParamField>
+
+## Wallet
+
+<ParamField path="body.VALIDATOR_WALLET_NAME" type="string" required default="default">
+  Name of the Bittensor coldkey wallet, as it appears in `~/.bittensor/wallets/`. This directory is mounted read-only into the container.
+</ParamField>
+
+<ParamField path="body.VALIDATOR_HOTKEY_NAME" type="string" required default="default">
+  Name of the hotkey under the coldkey wallet used to sign validator operations.
+</ParamField>
+
+<ParamField path="body.SCREENER_NAME" type="string">
+  Identifier for this screener instance when `MODE=screener`. Ignored in `validator` mode.
+</ParamField>
+
+<ParamField path="body.SCREENER_PASSWORD" type="string">
+  Password used to authenticate the screener with the platform when `MODE=screener`. Ignored in `validator` mode.
+</ParamField>
+
+## Intervals
+
+All interval variables accept values in seconds.
+
+<ParamField path="body.SEND_HEARTBEAT_INTERVAL_SECONDS" type="number" default="20">
+  How often the validator sends a heartbeat to the Bitrecs platform. Reducing this value increases platform load.
+</ParamField>
+
+<ParamField path="body.SET_WEIGHTS_INTERVAL_SECONDS" type="number" default="300">
+  How often the validator submits scoring weights to the Bittensor network.
+</ParamField>
+
+<ParamField path="body.CHECK_RUNNING_AGENTS_INTERVAL_SECONDS" type="number" default="60">
+  How often the validator polls for agents that are currently running evaluations.
+</ParamField>
+
+<ParamField path="body.CHECK_PENDING_EVALUATIONS_INTERVAL_SECONDS" type="number" default="30">
+  How often the validator checks for evaluations queued and waiting to be picked up.
+</ParamField>
+
+<ParamField path="body.R2_SYNC_INTERVAL_SECONDS" type="number" default="900">
+  How often evaluation artifacts are synchronised to Cloudflare R2 storage.
+</ParamField>
+
+<ParamField path="body.REQUEST_EVALUATION_INTERVAL_SECONDS" type="number" default="45">
+  How often the validator requests a new evaluation task from the platform.
+</ParamField>
+
+## API keys
+
+<ParamField path="body.OPENROUTER_API_KEY" type="string">
+  API key for [OpenRouter](https://openrouter.ai), used by the evaluation harness to call LLM models during agent scoring.
+</ParamField>
+
+<ParamField path="body.CHUTES_API_KEY" type="string">
+  API key for [Chutes](https://chutes.ai), an alternative inference provider used during evaluations.
+</ParamField>
+
+<ParamField path="body.AGORA_URL" type="string">
+  Base URL for the Agora service, which provides additional agent communication capabilities during evaluation.
+</ParamField>
+
+<ParamField path="body.AGORA_API_KEY" type="string">
+  API key authenticating the validator with the Agora service.
+</ParamField>
+
+---
+
+## Complete example .env
+
+```bash
+DEBUG=True
+BITRECS_PLATFORM_URL=
+BITRECS_PLATFORM_API_KEY=
+NETUID=296
+SUBTENSOR_NETWORK=test
+SUBTENSOR_ADDRESS=
+
+MODE=screener
+SCREENER_NAME=screener-1-1
+SCREENER_PASSWORD=supersecret
+SEND_HEARTBEAT_INTERVAL_SECONDS=10
+SET_WEIGHTS_INTERVAL_SECONDS=300
+
+VALIDATOR_WALLET_NAME=default
+VALIDATOR_HOTKEY_NAME=default
+
+CHECK_RUNNING_AGENTS_INTERVAL_SECONDS=60
+CHECK_PENDING_EVALUATIONS_INTERVAL_SECONDS=30
+CHECK_AGENT_UPLOAD_RATE_LIMIT_INTERVAL_SECONDS=600
+
+REQUEST_EVALUATION_INTERVAL_SECONDS=45
+SIMULATE_EVALUATION_RUNS=False
+SIMULATE_EVALUATION_RUN_MAX_TIME_PER_STAGE_SECONDS=3
+
+OPENROUTER_API_KEY=
+CHUTES_API_KEY=
+
+AGORA_URL=
+AGORA_API_KEY=
+```
+
+<Note>
+  Copy this block into `~/bitrecs/.env` and fill in the blank values before starting Docker Compose. Never commit your `.env` file to version control.
+</Note>

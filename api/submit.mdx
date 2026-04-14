@@ -1,0 +1,147 @@
+---
+title: "POST /submit — submit a miner artifact"
+description: "Permanently submit a miner artifact to the Bitrecs V2 evaluation pipeline. Requires a valid chain commitment and transport-layer signatures."
+---
+
+The `/submit` endpoint accepts a finalized miner artifact, verifies it against the Bittensor chain commitment, runs a cosine similarity check against existing agents, and stores it in the evaluation queue. Unlike `/check`, this endpoint writes to the database and is the authoritative submission path. Miners must commit their Gist hash on-chain before calling this endpoint, and the request must include transport-layer authentication headers in addition to the submission signature.
+
+<Warning>
+  Submitting is permanent. Once an artifact is accepted, the hotkey and Gist ID are locked for the current evaluation cycle. Use the [`POST /check`](/api/check) endpoint to validate your artifact before committing to the chain.
+</Warning>
+
+## Request
+
+**`POST https://v2.api.bitrecs.ai/submit`**
+
+### Required headers
+
+<ParamField header="X-Signature" type="string" required>
+  Transport-layer Ed25519 signature. Signs a canonical string composed of the submission body, `X-Nonce`, `X-T-Nonce`, and `X-Timestamp`.
+</ParamField>
+
+<ParamField header="X-Timestamp" type="string" required>
+  Unix timestamp (seconds) of the request. The server rejects timestamps that are too old or too far in the future.
+</ParamField>
+
+<ParamField header="X-Nonce" type="string" required>
+  Random nonce string included in the transport signature payload to prevent replay attacks.
+</ParamField>
+
+<ParamField header="X-T-Nonce" type="string" required>
+  Secondary transport nonce. Both nonces are incorporated when computing and verifying `X-Signature`.
+</ParamField>
+
+### Body
+
+<ParamField body="created_at" type="string" required>
+  ISO 8601 timestamp that must match the Gist's `created_at` field exactly.
+</ParamField>
+
+<ParamField body="github_account" type="string" required>
+  GitHub username that owns the Gist.
+</ParamField>
+
+<ParamField body="gist_id" type="string" required>
+  GitHub Gist ID containing the YAML artifact.
+</ParamField>
+
+<ParamField body="hotkey" type="string" required>
+  Miner's Bittensor SS58 hotkey. Must be registered on the subnet and match `miner_hotkey` inside the artifact YAML.
+</ParamField>
+
+<ParamField body="signature" type="string" required>
+  Ed25519 signature of the submission payload, proving the request originated from the stated hotkey.
+</ParamField>
+
+## Response (201)
+
+<ResponseField name="artifact_id" type="string" required>
+  UUID assigned to the newly stored artifact.
+</ResponseField>
+
+<ResponseField name="request_id" type="string" required>
+  Unique hex request identifier for tracing and support purposes.
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Human-readable confirmation, e.g. `"Artifact submitted successfully"`.
+</ResponseField>
+
+<ResponseField name="similarity_check" type="string" required>
+  Whether cosine similarity checking was active — `"enabled"` or `"disabled"`.
+</ResponseField>
+
+<ResponseField name="similar_results" type="array">
+  List of existing agents whose cosine distance from this submission fell below the similarity threshold. Each entry has an `agent_id` (string) and a `distance` (float). An empty array means no similar agents were found.
+
+  <Expandable title="similar_results item">
+    <ResponseField name="agent_id" type="string">
+      UUID of the similar agent.
+    </ResponseField>
+    <ResponseField name="distance" type="number">
+      Cosine distance between the submitted artifact and this agent. Values closer to 0 indicate greater similarity.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Error responses
+
+| Status | Meaning |
+|--------|---------|
+| `400`  | Bad request — invalid input, signature mismatch, timestamp expired, failed chain commitment, or artifact validation error. |
+| `402`  | Payment required — payment check failed or insufficient funds. |
+| `409`  | Conflict — this upload request was already processed (duplicate detection). |
+| `429`  | Too many requests — rate limit exceeded. |
+| `500`  | Internal server error — unexpected server-side failure. The `request_id` in the response can be used for support. |
+| `503`  | Service unavailable — submissions are disabled or insufficient validators are connected. |
+
+## Example
+
+<CodeGroup>
+
+```bash curl
+curl --request POST \
+  --url https://v2.api.bitrecs.ai/submit \
+  --header 'Content-Type: application/json' \
+  --header 'X-Signature: 0xdeadbeef...' \
+  --header 'X-Timestamp: 1727784000' \
+  --header 'X-Nonce: a1b2c3d4e5f6' \
+  --header 'X-T-Nonce: z9y8x7w6v5u4' \
+  --data '{
+    "created_at": "2025-10-01T12:00:00+00:00",
+    "github_account": "my-github-user",
+    "gist_id": "abc123def456abc123def456abc12345",
+    "hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "signature": "0x1a2b3c..."
+  }'
+```
+
+</CodeGroup>
+
+**Success response (201)**
+
+```json
+{
+  "artifact_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "request_id": "d8e8fca2dc0f896fd7cb4cb0031ba249",
+  "message": "Artifact submitted successfully",
+  "similarity_check": "enabled",
+  "similar_results": []
+}
+```
+
+**Error response (400) — timestamp expired**
+
+```json
+{
+  "detail": "Invalid or expired timestamp"
+}
+```
+
+**Error response (503) — system disabled**
+
+```json
+{
+  "detail": "Submissions are currently disabled. Please try again later."
+}
+```

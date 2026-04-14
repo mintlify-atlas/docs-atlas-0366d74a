@@ -1,0 +1,192 @@
+---
+title: "Get started mining on Bitrecs V2"
+description: "Install the toolchain, configure your environment, create an artifact.yaml, upload it to GitHub Gist, and submit your first onchain artifact in minutes."
+keywords: ["bitrecs", "mining", "quickstart", "artifact", "gist", "bittensor", "hotkey", "uv"]
+---
+
+Mining on Bitrecs V2 means crafting a YAML artifact — a bundle of Jinja2 prompt templates, a model choice, and sampling parameters — then submitting it to the evaluation pipeline where it competes against other miners for onchain emissions. Unlike traditional mining, there is no hardware to provision: you iterate on prompts and model configuration, and the platform handles inference. This guide walks you from a fresh machine to a confirmed onchain submission.
+
+<Note>
+  Each hotkey may only have one active submission at a time. Plan your artifact carefully before uploading — you cannot edit a submitted Gist.
+</Note>
+
+## Prerequisites
+
+- A registered Bittensor wallet with a hotkey on the Bitrecs subnet (mainnet netuid **122**, testnet netuid **296**)
+- A GitHub account with Gist access
+- Python 3.11+ (managed by UV)
+
+## Steps
+
+<Steps>
+  <Step title="Install UV">
+    UV is the Python package and project manager used by Bitrecs V2. Install it with the official installer:
+
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+
+    Restart your shell or source your profile after installation so the `uv` command is available.
+  </Step>
+
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/bitrecs/bitrecs-v2
+    cd bitrecs-v2
+    ```
+  </Step>
+
+  <Step title="Set up the environment">
+    Sync all dependencies using UV, then create a `.env` file with your subtensor connection details:
+
+    ```bash
+    uv sync
+    ```
+
+    ```bash
+    touch .env
+    ```
+
+    Add these two variables to `.env`:
+
+    ```env
+    SUBTENSOR_ADDRESS=wss://test.finney.opentensor.ai:443
+    SUBTENSOR_NETWORK=test
+    ```
+
+    <Tip>
+      For mainnet, use `wss://entrypoint-finney.opentensor.ai:443` and `SUBTENSOR_NETWORK=finney`.
+    </Tip>
+  </Step>
+
+  <Step title="Acquire a hotkey on the subnet">
+    Register a fresh hotkey on the Bitrecs subnet using `btcli`. Each hotkey is tied to exactly one submission, so use a dedicated hotkey for each artifact you plan to submit.
+
+    ```bash
+    btcli subnet register --netuid 122 --wallet.name default --wallet.hotkey default
+    ```
+
+    Replace `122` with `296` if you are on testnet.
+  </Step>
+
+  <Step title="Create your artifact.yaml">
+    Create a file named `artifact.yaml` (or any name you prefer locally). The artifact defines the prompts and model configuration the evaluation harness will run. Below is the canonical example from the repository:
+
+    ```yaml artifact.yaml
+    name: "bitrecs recommender"
+    version_num: "1"
+    status: "screening_1"
+    miner_hotkey: "5F95Nub62Fhwy3UFBMWg5eDou1B45yrzXaa7FjgXMALcER6r"
+    provider: "CHUTES"
+    model: "qwen/qwen3-next-80b-a3b-instruct"
+
+    system_prompt_template: |
+      You are a shopping assistant, today's date is {{current_date}}.
+    user_prompt_template: |
+       # SCENARIO
+        You are an ecommerce recommender with deep expertise in store catalog, product attributes, user behavior, and seasonal trends.
+        A customer is shopping on your website, build a basket of {{num_recs}} product recommendations with no duplicates based on the provided context and utilizing your persona attributes.
+
+        # YOUR PERSONA
+        <persona>{{persona}}</persona>
+
+        # YOUR ROLE
+        - Achievements: salesperson of the year, expert product recommender
+        - Recommend **{{num_recs}}** products (A -> B,Y,Z)
+        - Increase average order value and conversion rate
+        - Use deep product catalog knowledge
+        - Understand product attributes and revenue impact
+        - Avoid variant duplicates (same product in different colors/sizes)
+
+        # YOUR TASK
+        Recommend **{{num_recs}}** unique products from the context for the customer.
+        The product name can contain important information like which category it belongs to, sometimes denoted by | characters indicating the category hierarchy.
+        Leverage the complete information ecosystem - product catalog, user context, seasonal trends, pricing considerations and your expert role as a {{persona}} - and return {{num_recs}} recommendations.
+        Apply comprehensive analysis using all available inputs: product attributes from the context, user cart and order history, seasonality, seasonal events, pricing considerations and your personas core_attributes to return a cohesive recommendation set.
+        Do **not** recommend products that are already in the cart or from past orders.
+        Ensure the recommendations are relevant to the Viewing SKU (if present) and maintain gender consistency.
+        If {{sku}} is NA or not provided, then focus on general recommendations based on cart and order history.
+
+        # CUSTOMER CONTEXT
+        Viewing SKU: <sku>{{sku}}</sku><sku_info>{{sku_info}}</sku_info>
+        Cart items: <cart>{{cart_json}}</cart>
+        Past Orders: <orders>{{order_json}}</orders>
+
+        Available products:
+        <context>
+        {{product_catalog}}
+        </context>
+
+        # OUTPUT REQUIREMENTS
+        - Return ONLY a JSON array.
+        - NO Python dictionary syntax (no single quotes).
+        - Each item must be valid JSON with: "sku": "...", "name": "...", "price": "...", "reason": "..."
+        - Must return exactly {{num_recs}} items.
+        - Return items MUST exist in context.
+        - Return items must NOT exist in the cart or from previous orders.
+        - No duplicates.
+        - No explanations or text outside the JSON array.
+
+    sampling_params:
+      temperature: 0.2
+    ```
+
+    Replace `miner_hotkey` with your own hotkey's ss58 address. See the [artifact reference](/mining/artifact-reference) for a description of every field.
+  </Step>
+
+  <Step title="Upload to GitHub Gist as a single commit">
+    Go to [gist.github.com](https://gist.github.com) and create a new Gist:
+
+    1. Paste the contents of your `artifact.yaml` into the editor.
+    2. Name the file `artifact.yaml`.
+    3. Click **Create secret gist** (or public — both are accepted).
+
+    <Warning>
+      Do **not** edit the Gist after creating it. The system rejects Gists with more than one commit. If you need to change anything, create a brand-new Gist.
+    </Warning>
+
+    Copy the Gist ID from the URL: `https://gist.github.com/YOUR_ACCOUNT/GIST_ID`
+  </Step>
+
+  <Step title="Submit via the CLI">
+    Run the upload command from the repository root. Replace the placeholder values with your GitHub account name, Gist ID, and wallet key names:
+
+    ```bash
+    uv run bitrecs_cli.py upload \
+      --github-account YOUR_GITHUB_ACCOUNT \
+      --gist-id YOUR_GIST_ID \
+      --coldkey-name default \
+      --hotkey-name default
+    ```
+
+    The CLI will:
+    1. Validate the Gist and artifact locally.
+    2. Check your eligibility against the Bitrecs API.
+    3. Commit the submission onchain.
+    4. Wait ~12 seconds for the reveal period.
+    5. POST the signed artifact to the submission endpoint.
+
+    <Note>
+      The full process can take up to 1 minute depending on chain congestion. Do not interrupt the process.
+    </Note>
+
+    On success, you will receive an artifact ID and a link to track your submission on the dashboard.
+  </Step>
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Artifact reference" icon="file-code" href="/mining/artifact-reference">
+    Full documentation for every field in the artifact YAML format.
+  </Card>
+  <Card title="Submission process" icon="arrow-up-from-bracket" href="/mining/submission-process">
+    Understand what happens under the hood during the onchain commitment flow.
+  </Card>
+  <Card title="Mining tips" icon="lightbulb" href="/mining/tips">
+    Prompt engineering advice, provider tradeoffs, and common pitfalls to avoid.
+  </Card>
+  <Card title="Scoring overview" icon="chart-bar" href="/scoring/overview">
+    Learn how WTA scoring and Pareto dominance determine which miner earns emissions.
+  </Card>
+</CardGroup>

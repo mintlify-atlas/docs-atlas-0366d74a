@@ -1,0 +1,214 @@
+---
+title: "Tips for effective Bitrecs mining"
+description: "Practical guidance on avoiding disqualification, tuning prompts for ecommerce recommendations, choosing a provider, and understanding screener thresholds."
+keywords: ["bitrecs", "mining", "tips", "prompt engineering", "temperature", "provider", "screener", "cosine similarity", "ecommerce"]
+---
+
+Bitrecs V2 has a small number of hard rules that will get your artifact rejected before it is ever evaluated, and a larger set of softer quality signals that determine how well it scores once it reaches the validator stage. Understanding both categories is the difference between a submission that idles in screener failures and one that competes for emissions. This page covers the most important constraints, configuration choices, and prompt engineering patterns to keep in mind.
+
+<Warning>
+  Each hotkey may only submit **one artifact**. There are no take-backs. Read every item on this page before you submit.
+</Warning>
+
+## Hard rules — these will get you rejected
+
+<AccordionGroup>
+  <Accordion title="One submission per hotkey — no exceptions">
+    The platform enforces a strict one-submission-per-hotkey rule. If your hotkey has already been used for a submission — even a failed one that never reached the validator — it cannot be used again. Always use a fresh hotkey for each artifact you intend to submit.
+
+    Acquire a new hotkey on the subnet before each submission:
+
+    ```bash
+    btcli subnet register --netuid 122 --wallet.name default --wallet.hotkey my_new_hotkey
+    ```
+  </Accordion>
+
+  <Accordion title="Gist must have exactly one commit — never edit after creating">
+    The gist validator checks the commit history of your Gist before allowing submission. If you create a Gist and then return to edit it, GitHub creates a second commit, and your Gist will be permanently rejected:
+
+    ```
+    Gist must not have multiple commits - please create a new Gist for each submission
+    and do not update the Gist after submission.
+    ```
+
+    If you notice a mistake in your artifact after creating the Gist, create a brand-new Gist with the corrected content and use the new Gist ID when submitting.
+  </Accordion>
+
+  <Accordion title="Gist must be less than 24 hours old at submission time">
+    The platform checks the `created_at` timestamp of your Gist both in the CLI and server-side. A Gist older than 24 hours will be rejected. Plan to create your Gist and submit within the same working session.
+
+    If you need extra preparation time, do all your editing and testing locally first, then create the Gist only when you are ready to submit.
+  </Accordion>
+
+  <Accordion title="Model must cost less than $1 per million tokens">
+    The `model` field must reference a model priced below $1/M tokens on your chosen provider. Free tier models (identifiers containing `:free`) are explicitly blocked. Check the pricing page for your provider before choosing a model.
+
+    Expensive frontier models are generally not competitive here — capable open-weight models in the sub-$1 range perform well and submit successfully.
+  </Accordion>
+
+  <Accordion title="Only recognized template variables are allowed">
+    Your Jinja2 templates may only use the following variable names:
+
+    | Variable | What it contains |
+    |---|---|
+    | `{{current_date}}` | Today's date |
+    | `{{num_recs}}` | Number of recommendations to return |
+    | `{{persona}}` | Customer shopping persona |
+    | `{{sku}}` | Currently viewed product SKU |
+    | `{{sku_info}}` | Attributes of the viewed SKU |
+    | `{{cart_json}}` | Customer's current cart |
+    | `{{order_json}}` | Customer's past orders |
+    | `{{product_catalog}}` | Candidate product pool |
+
+    Any other variable names (including typos like `{{your_persona}}` instead of `{{persona}}`) will cause the artifact to fail local validation. Additionally, `product_catalog`, `cart_json`, and `order_json` may each appear **at most once** across both templates combined.
+  </Accordion>
+</AccordionGroup>
+
+## Provider and model selection
+
+<AccordionGroup>
+  <Accordion title="Provider: CHUTES is the only accepted provider">
+    Only **CHUTES** is accepted for new submissions. Any other provider value will be rejected by the artifact validator. Always set:
+
+    ```yaml
+    provider: "CHUTES"
+    ```
+
+    Check the Bitrecs Discord for announcements if additional providers are added in future.
+  </Accordion>
+
+  <Accordion title="Choosing a model">
+    The model identifier must match a model available on your provider and must be under $1/M tokens. Strong choices tend to be capable instruction-following open-weight models with good JSON compliance. The reference artifact uses `qwen/qwen3-next-80b-a3b-instruct` as a starting point.
+
+    Prioritize models known for:
+    - Reliable JSON output (avoids format failures during evaluation).
+    - Strong instruction following (respects the output requirements section).
+    - Good multilingual or broad domain knowledge (ecommerce catalogs span many categories).
+  </Accordion>
+</AccordionGroup>
+
+## Temperature and sampling
+
+<AccordionGroup>
+  <Accordion title="Start with temperature 0.2">
+    The reference artifact uses `temperature: 0.2`. This is deliberately conservative: at evaluation time, the model must return a precisely structured JSON array with no extra text. Higher temperatures increase the risk of the model deviating from the format, which causes hard evaluation failures.
+
+    ```yaml
+    sampling_params:
+      temperature: 0.2
+    ```
+
+    You can experiment with slightly higher temperatures (0.3–0.5) if your prompts are robust and you have tested locally, but values above 0.7 are rarely beneficial for structured output tasks.
+  </Accordion>
+
+  <Accordion title="Optional: top_p, max_tokens, stop_sequences">
+    These parameters are optional and supported by the platform:
+
+    ```yaml
+    sampling_params:
+      temperature: 0.5
+      top_p: 0.9
+      max_tokens: 2048
+      stop_sequences: ["\n\n"]
+    ```
+
+    Use `max_tokens` to cap response length and reduce cost, but set it high enough that your full recommendation set fits. A response with `{{num_recs}}` items at reasonable reason lengths typically fits within 1,024–2,048 tokens.
+  </Accordion>
+</AccordionGroup>
+
+## Similarity check
+
+<AccordionGroup>
+  <Accordion title="Cosine similarity — avoid copying other artifacts">
+    After your artifact is accepted, the platform runs a cosine similarity check against existing submissions. If your prompt embeddings are too close to an existing artifact, the similarity check will flag it. Your submission is still accepted, but the flag is visible in the response and may affect evaluation priority.
+
+    The similarity result appears in the CLI output after a successful upload:
+
+    ```
+    Similarity Check: flagged
+    Similar Agents:
+      - Agent ID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx, Distance: 0.04
+    ```
+
+    To avoid flags, write your prompts from scratch. Changing only a few words in someone else's prompt will not fool the embedding-based check.
+  </Accordion>
+</AccordionGroup>
+
+## Testing locally before submitting
+
+<AccordionGroup>
+  <Accordion title="Validate your artifact without submitting">
+    The CLI validators run locally before any network calls. You can invoke them directly to check your artifact for field errors and template variable issues:
+
+    ```python
+    from models.agent import Agent
+    from rules.agent_validator import validate_artifact_template
+
+    with open("artifact.yaml") as f:
+        raw = f.read()
+
+    agent = Agent.from_yaml(raw)
+    valid, reason = validate_artifact_template(agent, raw)
+    print(valid, reason)
+    ```
+
+    This catches name length, status value, version number, Jinja2 syntax errors, and variable count violations before you create the Gist.
+  </Accordion>
+
+  <Accordion title="Test your prompts with rendered variables">
+    Render your templates manually with realistic values to verify the output looks correct before committing:
+
+    ```python
+    from jinja2 import Template
+
+    system_tpl = Template(open("artifact.yaml").read().split("system_prompt_template: |")[1].split("user_prompt_template:")[0])
+    rendered = system_tpl.render(current_date="2026-04-14")
+    print(rendered)
+    ```
+
+    Feed the rendered prompts directly to your chosen provider's playground or API to see what the model returns with your parameters.
+  </Accordion>
+</AccordionGroup>
+
+## Prompt engineering for ecommerce
+
+<AccordionGroup>
+  <Accordion title="Make full use of all context variables">
+    The evaluation harness injects real ecommerce context: a viewed SKU, cart contents, order history, a persona, and a product catalog. Artifacts that actively use all of this context — referencing `{{sku_info}}`, reasoning from `{{cart_json}}`, and filtering against `{{order_json}}` — tend to score higher than those that treat the recommendation as a generic task.
+
+    Explicitly instruct the model to:
+    - Avoid products already in the cart or past orders.
+    - Prioritize products complementary to the viewed SKU.
+    - Use the persona attributes to tailor the recommendation set.
+  </Accordion>
+
+  <Accordion title="Reason quality is graded">
+    Each returned item must include a `reason` field. The evaluation harness grades reasons, not just SKU selections. A good reason:
+    - Is relevant to the viewing SKU and the overall recommendation set.
+    - Is a single, plain-text sentence with no punctuation or line breaks.
+    - Focuses on customer benefit, not internal business strategy.
+
+    Prompt the model explicitly to write reasons that explain why each product fits the customer's current context — not generic phrases like "this is a popular item."
+  </Accordion>
+
+  <Accordion title="Maintain gender consistency">
+    Evaluations include scenarios with gendered products. If the viewed SKU is gendered (e.g., women's shoes), all recommendations must match that gender. Mixing gendered products is a known failure mode. Add an explicit instruction to your prompt:
+
+    ```
+    If the Viewing SKU is gendered, always recommend products that match the same gender.
+    Never mix gendered products in the recommendation set.
+    ```
+  </Accordion>
+
+  <Accordion title="Understanding screener thresholds">
+    Your artifact passes through two screener stages before reaching full validator evaluation. Screener 1 enforces basic format and data consistency. Screener 2 runs extended quality checks. Validators then score against rotating ecommerce evaluation environments.
+
+    To pass screeners, the model must:
+    - Return exactly `{{num_recs}}` items in a valid JSON array.
+    - Use only SKUs that exist in the provided `product_catalog`.
+    - Exclude any SKU already in the cart or order history.
+    - Return no duplicate SKUs.
+
+    Format failures — malformed JSON, extra text outside the array, single-quoted strings — are the most common screener rejection reason. Keep the output requirements section prominent in your user prompt and instruct the model explicitly to return nothing outside the JSON array.
+  </Accordion>
+</AccordionGroup>

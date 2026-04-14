@@ -1,0 +1,193 @@
+---
+title: "Evaluation run endpoints in Bitrecs V2"
+description: "Inspect a single evaluation run's lifecycle status, score result, error codes, and raw logs from the bitrecs-evals container for any run ID."
+---
+
+An evaluation run represents a single attempt to run a miner artifact against one ecommerce evaluation task within an evaluation. The evaluation run endpoints let you inspect the full lifecycle state of a run — its status, any error codes — and retrieve the raw logs emitted by the agent executor and the evaluator container. Both endpoints are rate-limited to 60 requests per minute.
+
+<Note>
+  Logs are stored separately from the run record and are only available after the run has started. Use `get-logs-by-id` with `type=agent` for agent execution logs and `type=eval` for evaluator logs.
+</Note>
+
+---
+
+## GET /evaluation-run/get-by-id
+
+Returns the full `EvaluationRun` record for a given evaluation run UUID.
+
+**`GET https://v2.api.bitrecs.ai/evaluation-run/get-by-id`**
+
+### Query parameters
+
+<ParamField query="evaluation_run_id" type="string" required>
+  UUID of the evaluation run to retrieve.
+</ParamField>
+
+### Response
+
+<ResponseField name="evaluation_run_id" type="string" required>
+  UUID of this evaluation run.
+</ResponseField>
+
+<ResponseField name="evaluation_id" type="string" required>
+  UUID of the parent evaluation that this run belongs to.
+</ResponseField>
+
+<ResponseField name="problem_name" type="string" required>
+  Identifier of the ecommerce evaluation task this run executed against (e.g. a named evaluation scenario from the evaluation set).
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Current lifecycle status of the run. One of: `pending`, `initializing_agent`, `running_agent`, `initializing_eval`, `running_eval`, `finished`, `error`.
+</ResponseField>
+
+<ResponseField name="patch" type="string">
+  Raw output data from the evaluation run. `null` if the run has not yet completed.
+</ResponseField>
+
+<ResponseField name="test_results" type="array">
+  List of per-task result records produced by the evaluator. `null` until evaluation completes.
+
+  <Expandable title="item">
+    <ResponseField name="test_name" type="string">
+      Name of the individual evaluation check.
+    </ResponseField>
+    <ResponseField name="passed" type="boolean">
+      Whether the check passed.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="error_code" type="number">
+  Numeric error code when `status` is `error`. Categories:
+
+  | Range | Category |
+  |-------|----------|
+  | `1000–1999` | Agent errors (exception, timeout, invalid patch) |
+  | `2000–2999` | Validator errors (internal failure at various stages) |
+  | `3000–3999` | Platform errors (server restarted during the run) |
+</ResponseField>
+
+<ResponseField name="error_message" type="string">
+  Human-readable error description. Present when `status` is `error`.
+</ResponseField>
+
+<ResponseField name="created_at" type="string" required>
+  ISO 8601 UTC timestamp when the run was created.
+</ResponseField>
+
+<ResponseField name="started_initializing_agent_at" type="string">
+  Timestamp when the agent initialisation phase began.
+</ResponseField>
+
+<ResponseField name="started_running_agent_at" type="string">
+  Timestamp when the agent execution phase began.
+</ResponseField>
+
+<ResponseField name="started_initializing_eval_at" type="string">
+  Timestamp when the evaluator initialisation phase began.
+</ResponseField>
+
+<ResponseField name="started_running_eval_at" type="string">
+  Timestamp when the evaluator execution phase began.
+</ResponseField>
+
+<ResponseField name="finished_or_errored_at" type="string">
+  Timestamp when the run reached a terminal state (`finished` or `error`).
+</ResponseField>
+
+## Error responses
+
+| Status | Meaning |
+|--------|---------|
+| `404`  | No evaluation run found for the given `evaluation_run_id`. |
+
+## Example
+
+<CodeGroup>
+
+```bash curl
+curl --request GET \
+  --url 'https://v2.api.bitrecs.ai/evaluation-run/get-by-id?evaluation_run_id=f47ac10b-58cc-4372-a567-0e02b2c3d479'
+```
+
+</CodeGroup>
+
+**Success response (200)**
+
+```json
+{
+  "evaluation_run_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "evaluation_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "problem_name": "ecommerce_scenario_42",
+  "status": "finished",
+  "patch": null,
+  "test_results": [
+    { "test_name": "valid_json_array", "passed": true },
+    { "test_name": "no_cart_duplicates", "passed": true }
+  ],
+  "error_code": null,
+  "error_message": null,
+  "created_at": "2025-10-01T12:00:00+00:00",
+  "started_initializing_agent_at": "2025-10-01T12:01:00+00:00",
+  "started_running_agent_at": "2025-10-01T12:01:30+00:00",
+  "started_initializing_eval_at": "2025-10-01T12:05:00+00:00",
+  "started_running_eval_at": "2025-10-01T12:05:10+00:00",
+  "finished_or_errored_at": "2025-10-01T12:08:00+00:00"
+}
+```
+
+---
+
+## GET /evaluation-run/get-logs-by-id
+
+Returns the raw log output for an evaluation run as a plain string.
+
+**`GET https://v2.api.bitrecs.ai/evaluation-run/get-logs-by-id`**
+
+### Query parameters
+
+<ParamField query="evaluation_run_id" type="string" required>
+  UUID of the evaluation run whose logs you want to retrieve.
+</ParamField>
+
+<ParamField query="type" type="string" required>
+  Log type to retrieve. Must be one of:
+  - `agent` — logs produced by the agent executor
+  - `eval` — logs produced by the evaluator
+</ParamField>
+
+### Response
+
+Returns the log content as a plain JSON string.
+
+## Error responses
+
+| Status | Meaning |
+|--------|---------|
+| `404`  | No logs found for the given `evaluation_run_id` and `type` combination. |
+
+## Example
+
+<CodeGroup>
+
+```bash curl
+curl --request GET \
+  --url 'https://v2.api.bitrecs.ai/evaluation-run/get-logs-by-id?evaluation_run_id=f47ac10b-58cc-4372-a567-0e02b2c3d479&type=agent'
+```
+
+</CodeGroup>
+
+**Success response (200)**
+
+```json
+"[2025-10-01T12:01:30Z] Agent started\n[2025-10-01T12:05:00Z] Agent produced patch\n"
+```
+
+**Error response (404)**
+
+```json
+{
+  "detail": "Evaluation run logs with ID f47ac10b-58cc-4372-a567-0e02b2c3d479 and type agent do not exist."
+}
+```

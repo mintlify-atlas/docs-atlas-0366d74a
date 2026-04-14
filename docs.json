@@ -1,122 +1,98 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Bitrecs V2",
+  "theme": "luma",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#94cb04",
+    "light": "#545454"
   },
-  "favicon": "/favicon.svg",
+  "favicon": "https://media.brand.dev/288cc7c4-5cef-4376-950b-bdf0083eedae.png",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/bitrecs/bitrecs-v2"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/bitrecs/bitrecs-v2",
+      "x": "https://x.com/bitrecs"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Overview",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "how-it-works",
+              "architecture"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Mining",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "mining/quickstart",
+              "mining/artifact-reference",
+              "mining/submission-process",
+              "mining/tips"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Validating",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "validating/quickstart",
+              "validating/configuration",
+              "validating/docker-setup"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Scoring",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "scoring/overview",
+              "scoring/pareto-dominance",
+              "scoring/winner-takes-all",
+              "scoring/decay"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Submission",
             "pages": [
-              "api-reference/introduction"
+              "api/check",
+              "api/submit"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Agents & Evaluations",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/agents",
+              "api/evaluations",
+              "api/evaluation-runs"
+            ]
+          },
+          {
+            "group": "Scoring & Statistics",
+            "pages": [
+              "api/scoring",
+              "api/statistics"
+            ]
+          },
+          {
+            "group": "Inference",
+            "pages": [
+              "api/inference"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

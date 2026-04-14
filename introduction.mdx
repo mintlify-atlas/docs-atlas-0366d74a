@@ -1,0 +1,44 @@
+---
+title: "Bitrecs V2: a Bittensor subnet for prompt evolution"
+description: "Bitrecs V2 is a Bittensor subnet where miners compete by evolving prompt artifacts to power a live ecommerce recommendation engine."
+keywords: ["bitrecs", "bittensor", "subnet", "prompt evolution", "ecommerce", "recommendation", "miners", "validators"]
+---
+
+Bitrecs V2 connects Bittensor's incentive mechanism to a real commercial product: an ecommerce recommendation widget that drives sales for merchants. Miners improve recommendation quality by tuning `artifact.yaml` files — bundles of prompts, model selection, and sampling parameters — which the platform evaluates continuously against rotating ecommerce tasks. The best-performing submission each epoch receives token emissions via a winner-takes-all (WTA) scoring engine.
+
+## What Bitrecs does
+
+Merchants embed the Bitrecs widget on their storefronts. Behind the scenes, the subnet's miners compete to find the prompts and model configurations that produce the most accurate, profitable product recommendations. Each time a miner submits an artifact, it enters an evaluation pipeline that tests recommendation quality across multiple simulated customer journeys — cart context, order history, viewing SKU, persona, and catalog. The top miner on the Pareto frontier earns emissions; merchants get continuously improving recommendations without managing models themselves.
+
+## How the subnet works
+
+Miners craft an `artifact.yaml` containing a system prompt template, a user prompt template, a model, a provider (CHUTES or OpenRouter), and sampling parameters. They upload the artifact to a GitHub Gist, commit the Gist ID to the Bittensor chain, then submit it to the platform API. The API runs the artifact through two screener stages before routing it to validators for full evaluation. Validators run the artifact inside an isolated Docker container ([bitrecs-evals](https://github.com/bitrecs/bitrecs-evals)), score the output, and report results back to the platform. Scores are aggregated using ε-Pareto dominance and WTA logic; the winning miner's hotkey receives onchain weight assignments.
+
+## Networks
+
+| Network | Netuid |
+|---------|--------|
+| Mainnet | 122    |
+| Testnet | 296    |
+
+## Key features
+
+- **Prompt evolution** — miners iterate on Jinja2 prompt templates and model parameters rather than deploying code; the evaluation harness handles inference.
+- **WTA scoring** — a single top-performing miner receives emissions each epoch, determined by ε-Pareto dominance across multiple ecommerce evaluation environments.
+- **Two-stage screening** — lightweight screeners filter low-quality artifacts before they reach full validator evaluation, keeping the queue efficient.
+- **Linear decay** — scores decay 5% per day after a 3-day grace period (floor: 25%), incentivizing fresh submissions.
+- **Bittensor-native** — onchain commitments tie every submission to a registered hotkey; validators set weights directly on the subtensor.
+
+## Start here
+
+<CardGroup cols={3}>
+  <Card title="Mining quickstart" icon="pickaxe" href="/mining/quickstart">
+    Create and submit your first artifact.yaml to the evaluation pipeline.
+  </Card>
+  <Card title="Validator quickstart" icon="shield-check" href="/validating/quickstart">
+    Deploy a Docker-based validator and connect it to the platform API.
+  </Card>
+  <Card title="Scoring overview" icon="chart-bar" href="/scoring/overview">
+    Understand WTA scoring, Pareto frontiers, and how emissions are assigned.
+  </Card>
+</CardGroup>

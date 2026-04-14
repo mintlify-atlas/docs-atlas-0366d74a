@@ -1,0 +1,185 @@
+---
+title: "Set up a Bitrecs V2 validator node"
+description: "Install Docker and UV, configure your Bittensor wallet, and run the Bitrecs validator using Docker Compose on Ubuntu 24 LTS."
+---
+
+Validators on the Bitrecs V2 subnet evaluate agent quality by pulling miner-submitted agents, running them against standardised benchmarks inside an isolated Docker environment, and submitting scoring weights back to the Bittensor network. Unlike many subnets, Bitrecs V2 validators do not require a public IP address or any open inbound ports — all traffic is outbound.
+
+<Note>
+  These instructions target Ubuntu 24 LTS. The validator will not work on Windows or macOS without modification.
+</Note>
+
+<Steps>
+
+  <Step title="Update Ubuntu and reboot">
+    Bring your system packages up to date before installing any dependencies.
+
+    ```bash
+    sudo apt-get update && sudo apt-get upgrade -y
+    ```
+
+    Reboot the machine if the kernel was updated.
+  </Step>
+
+  <Step title="Install Docker">
+    Add the Docker repository and install Docker CE.
+
+    ```bash
+    sudo apt install -y apt-transport-https ca-certificates curl software-properties-common
+
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+      | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] \
+      https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+      | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    sudo apt update
+    sudo apt install -y docker-ce
+    ```
+
+    Verify Docker is running:
+
+    ```bash
+    sudo systemctl status docker
+    ```
+  </Step>
+
+  <Step title="Install UV">
+    UV is the Python package manager used to install and run `btcli`.
+
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+
+    Open a new shell session (or run `source ~/.bashrc`) so the `uv` binary is on your `PATH`.
+  </Step>
+
+  <Step title="Create the ~/bitrecs working directory">
+    The Docker Compose file expects the working directory to be named exactly `bitrecs` under your home directory. Do not use a different name.
+
+    ```bash
+    mkdir ~/bitrecs
+    cd ~/bitrecs
+    ```
+
+    All subsequent files — `.env`, `docker-compose-prod.yml`, and the `data/` volume — live here.
+  </Step>
+
+  <Step title="Set up your Bittensor wallet with btcli">
+    Initialise a UV project and install `bittensor-cli`, then regenerate your wallet keys.
+
+    ```bash
+    uv init
+    uv pip install bittensor-cli
+    ```
+
+    Regenerate the coldkey public key from your existing SS58 address:
+
+    ```bash
+    uv run btcli w regen-coldkeypub --ss58 <YOUR_COLDKEY_SS58_ADDRESS>
+    ```
+
+    Regenerate your hotkey:
+
+    ```bash
+    uv run btcli w regen-hotkey
+    ```
+
+    <Warning>
+      Never paste your coldkey mnemonic on a remote server. Use `regen-coldkeypub` to import the read-only public key only.
+    </Warning>
+  </Step>
+
+  <Step title="Pull Docker images">
+    Pull both the validator image and the evaluations image that is spawned during scoring.
+
+    ```bash
+    docker pull ghcr.io/bitrecs/bitrecs-v2:main
+    docker pull ghcr.io/bitrecs/bitrecs-evals:main
+    ```
+  </Step>
+
+  <Step title="Create the .env file">
+    Inside `~/bitrecs`, create a `.env` file and populate it with your configuration. Replace the placeholder values with your own credentials.
+
+    ```bash
+    touch .env
+    ```
+
+    ```bash
+    DEBUG=False
+
+    NETUID=296
+    BITRECS_PLATFORM_URL=
+    BITRECS_PLATFORM_API_KEY=
+    SUBTENSOR_NETWORK=test
+    SUBTENSOR_ADDRESS=
+
+    MODE=validator
+    SCREENER_NAME=
+    SCREENER_PASSWORD=
+    SEND_HEARTBEAT_INTERVAL_SECONDS=20
+    SET_WEIGHTS_INTERVAL_SECONDS=300
+
+    VALIDATOR_WALLET_NAME=default
+    VALIDATOR_HOTKEY_NAME=default
+
+    CHECK_RUNNING_AGENTS_INTERVAL_SECONDS=60
+    CHECK_PENDING_EVALUATIONS_INTERVAL_SECONDS=30
+    CHECK_AGENT_UPLOAD_RATE_LIMIT_INTERVAL_SECONDS=600
+    R2_SYNC_INTERVAL_SECONDS=900
+    REQUEST_EVALUATION_INTERVAL_SECONDS=45
+    SIMULATE_EVALUATION_RUNS=False
+    SIMULATE_EVALUATION_RUN_MAX_TIME_PER_STAGE_SECONDS=3
+
+    OPENROUTER_API_KEY=
+    CHUTES_API_KEY=
+
+    AGORA_URL=
+    AGORA_API_KEY=
+    ```
+
+    See [Validator environment variables](/validating/configuration) for a description of every variable.
+  </Step>
+
+  <Step title="Download and run Docker Compose">
+    Fetch the production Compose file into `~/bitrecs`:
+
+    ```bash
+    curl -L -o docker-compose-prod.yml \
+      "https://raw.githubusercontent.com/bitrecs/bitrecs-v2/refs/heads/main/validator/docker-compose-prod.yml"
+    ```
+
+    Start the validator and Watchtower in the background:
+
+    ```bash
+    docker compose -f docker-compose-prod.yml up -d
+    ```
+  </Step>
+
+  <Step title="Verify the containers are running">
+    Check that both `bitrecs-validator` and `bitrecs-watchtower` appear in the output:
+
+    ```bash
+    docker ps
+    ```
+
+    You should see two containers: `bitrecs-validator` and `bitrecs-watchtower`. Watchtower polls every 120 seconds and automatically pulls and restarts the validator whenever a new image is published to `ghcr.io/bitrecs/bitrecs-v2:main` — no manual updates are needed.
+  </Step>
+
+  <Step title="Check the logs">
+    Follow the validator logs to confirm it has connected to the Bittensor network and is processing heartbeats:
+
+    ```bash
+    docker compose -f docker-compose-prod.yml logs --tail 10 --follow validator
+    ```
+
+    Press `Ctrl+C` to exit the log stream.
+  </Step>
+
+</Steps>
+
+<Tip>
+  During an evaluation run, the validator automatically spawns a third container using the `bitrecs-evals` image. This container is short-lived and exits when the evaluation completes. Its appearance in `docker ps` is expected behaviour, not an error.
+</Tip>

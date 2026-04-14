@@ -1,0 +1,336 @@
+---
+title: "Scoring endpoints — weights and Pareto data"
+description: "Access miner scores, Pareto frontier data, winner-take-all weights, screener thresholds, scoring constants, and validator weight sets via the scoring API."
+---
+
+The scoring endpoints expose the data and computations that drive miner ranking on the Bitrecs V2 subnet. They cover everything from screener thresholds and latest set metadata through to the full Pareto frontier analysis and winner-take-all weight assignments. Validators use `POST /scoring/weight-set` to record the weights they commit on-chain; all other endpoints are read-only. All endpoints are rate-limited to 60 requests per minute unless noted otherwise.
+
+---
+
+## GET /scoring/screener-info
+
+Returns the configured screening thresholds and per-group average scores and wait times. Response is cached for **1 minute**.
+
+**`GET https://v2.api.bitrecs.ai/scoring/screener-info`**
+
+### Response
+
+<ResponseField name="screener_1_threshold" type="number" required>
+  Minimum score required to pass Screener 1.
+</ResponseField>
+
+<ResponseField name="screener_2_threshold" type="number" required>
+  Minimum score required to pass Screener 2.
+</ResponseField>
+
+<ResponseField name="prune_threshold" type="number" required>
+  Score below which an agent is pruned from the evaluation pipeline.
+</ResponseField>
+
+<ResponseField name="screener_1_average_score" type="number">
+  Average score across all Screener 1 evaluations. `null` if no data.
+</ResponseField>
+
+<ResponseField name="screener_2_average_score" type="number">
+  Average score across all Screener 2 evaluations. `null` if no data.
+</ResponseField>
+
+<ResponseField name="validator_average_score" type="number">
+  Average score across all validator-stage evaluations. `null` if no data.
+</ResponseField>
+
+<ResponseField name="screener_1_average_wait_time" type="number">
+  Average queue wait time (seconds) in the Screener 1 stage. `null` if no data.
+</ResponseField>
+
+<ResponseField name="screener_2_average_wait_time" type="number">
+  Average queue wait time (seconds) in the Screener 2 stage. `null` if no data.
+</ResponseField>
+
+<ResponseField name="validator_average_wait_time" type="number">
+  Average queue wait time (seconds) in the validator stage. `null` if no data.
+</ResponseField>
+
+<CodeGroup>
+
+```bash curl
+curl --request GET \
+  --url https://v2.api.bitrecs.ai/scoring/screener-info
+```
+
+</CodeGroup>
+
+---
+
+## GET /scoring/latest-set-info
+
+Returns the ID and creation timestamp of the most recent evaluation set. Rate-limited to **120 requests per minute**.
+
+**`GET https://v2.api.bitrecs.ai/scoring/latest-set-info`**
+
+### Response
+
+<ResponseField name="latest_set_id" type="number" required>
+  Integer ID of the latest evaluation set.
+</ResponseField>
+
+<ResponseField name="latest_set_created_at" type="string" required>
+  ISO 8601 UTC timestamp of when the latest evaluation set was created.
+</ResponseField>
+
+<CodeGroup>
+
+```bash curl
+curl --request GET \
+  --url https://v2.api.bitrecs.ai/scoring/latest-set-info
+```
+
+</CodeGroup>
+
+---
+
+## GET /scoring/pareto
+
+Computes and returns the Pareto frontier over miner scores in the current evaluation set.
+
+**`GET https://v2.api.bitrecs.ai/scoring/pareto`**
+
+### Response
+
+<ResponseField name="frontier_uids" type="array">
+  List of miner UIDs that lie on the Pareto frontier — i.e. not dominated by any other miner across all environments.
+</ResponseField>
+
+<ResponseField name="dominance_matrix" type="array">
+  Truncated (first 10 rows) dominance matrix. Each row corresponds to a miner in `uid_mapping`; a `1` at position `j` means this miner dominates miner `j`.
+</ResponseField>
+
+<ResponseField name="score_matrix" type="array">
+  Truncated (first 10 rows) score matrix used to compute the frontier.
+</ResponseField>
+
+<ResponseField name="uid_mapping" type="array">
+  Ordered list of miner UIDs corresponding to rows/columns of the dominance and score matrices.
+</ResponseField>
+
+<ResponseField name="miner_scores" type="object">
+  Map of miner UID to a dict of per-environment scores. Keys are UIDs (string); values are objects keyed by environment ID.
+</ResponseField>
+
+<ResponseField name="samples" type="object">
+  Map of environment ID to the number of samples used for that environment in the current set.
+</ResponseField>
+
+<ResponseField name="dominance_explanation" type="object">
+  Map of miner UID to a human-readable string: `"On frontier"` or `"Dominated by others"`.
+</ResponseField>
+
+<ResponseField name="stats" type="array">
+  Per-miner summary sorted by frontier membership then dominance count.
+
+  <Expandable title="item">
+    <ResponseField name="uid" type="string">Miner UID.</ResponseField>
+    <ResponseField name="on_frontier" type="boolean">Whether this miner is on the Pareto frontier.</ResponseField>
+    <ResponseField name="dominated_count" type="number">Number of other miners this miner dominates.</ResponseField>
+    <ResponseField name="score_avg" type="number">Mean score across all environments.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<Note>
+  If no miners are in the current evaluation set the response is `{"error": "No miners in current evaluation set"}`.
+</Note>
+
+<CodeGroup>
+
+```bash curl
+curl --request GET \
+  --url https://v2.api.bitrecs.ai/scoring/pareto
+```
+
+</CodeGroup>
+
+---
+
+## GET /scoring/wta
+
+Runs the winner-take-all algorithm over Pareto-frontier miners and returns final weights.
+
+**`GET https://v2.api.bitrecs.ai/scoring/wta`**
+
+### Response
+
+<ResponseField name="weights" type="object">
+  Map of miner UID to normalized emission weight (float in [0, 1], summing to 1.0 across all miners).
+</ResponseField>
+
+<ResponseField name="subset_scores" type="object">
+  Map of miner UID to aggregated subset-priority score used by the WTA algorithm.
+</ResponseField>
+
+<ResponseField name="miner_thresholds" type="object">
+  Per-miner threshold values computed from their score distributions.
+</ResponseField>
+
+<ResponseField name="miner_blocks" type="object">
+  Map of miner UID to the Bittensor block number of their first submission (used for tie-breaking).
+</ResponseField>
+
+<ResponseField name="subset_winners" type="object">
+  Sample of up to 10 environment subset combinations mapped to the winning miner UID for that subset.
+</ResponseField>
+
+<ResponseField name="stats" type="array">
+  Per-miner ranking summary sorted by descending weight.
+
+  <Expandable title="item">
+    <ResponseField name="winner_uid" type="string">Miner UID.</ResponseField>
+    <ResponseField name="subsets_won" type="number">Number of environment subsets this miner won.</ResponseField>
+    <ResponseField name="weight" type="number">Final emission weight.</ResponseField>
+    <ResponseField name="rank" type="number">Dense rank by weight (1 = highest).</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash curl
+curl --request GET \
+  --url https://v2.api.bitrecs.ai/scoring/wta
+```
+
+</CodeGroup>
+
+---
+
+## GET /scoring/constants
+
+Returns all static scoring constants used by the Bitrecs V2 scoring engine.
+
+**`GET https://v2.api.bitrecs.ai/scoring/constants`**
+
+### Response
+
+<ResponseField name="MIN_THRESHOLD_GAP" type="number">Minimum allowed gap between miner threshold and mean score.</ResponseField>
+<ResponseField name="MAX_THRESHOLD_GAP" type="number">Maximum allowed gap between miner threshold and mean score.</ResponseField>
+<ResponseField name="DEFAULT_Z_SCORE" type="number">Z-score used when computing default thresholds.</ResponseField>
+<ResponseField name="DEFAULT_EPISODES_PER_ENV" type="number">Default number of evaluation episodes per environment.</ResponseField>
+<ResponseField name="MIN_EPSILON" type="number">Minimum epsilon value used in threshold computation.</ResponseField>
+<ResponseField name="MAX_EPSILON" type="number">Maximum epsilon value used in threshold computation.</ResponseField>
+<ResponseField name="MINER_EMISSION_PORTION" type="number">Fraction of total subnet emission allocated to miners.</ResponseField>
+<ResponseField name="GRACE_PERIOD_DAYS" type="number">Number of days a new miner is protected from decay.</ResponseField>
+<ResponseField name="DECAY_FACTOR" type="number">Per-cycle score decay factor applied outside the grace period.</ResponseField>
+<ResponseField name="DECAY_FLOOR" type="number">Minimum score floor below which decay does not reduce scores further.</ResponseField>
+
+<CodeGroup>
+
+```bash curl
+curl --request GET \
+  --url https://v2.api.bitrecs.ai/scoring/constants
+```
+
+</CodeGroup>
+
+---
+
+## GET /scoring/latest
+
+Returns all miner scores for the most recent evaluation set as a list of records.
+
+**`GET https://v2.api.bitrecs.ai/scoring/latest`**
+
+### Response
+
+<ResponseField name="scores" type="array">
+  List of score records, one per miner–environment–set combination. Field names match the underlying scores database schema (e.g. `uid`, `hotkey`, `score`, `evaluation_set_id`).
+</ResponseField>
+
+<CodeGroup>
+
+```bash curl
+curl --request GET \
+  --url https://v2.api.bitrecs.ai/scoring/latest
+```
+
+</CodeGroup>
+
+---
+
+## POST /scoring/weight-set
+
+Records a validator weight set for the current evaluation set. Validators call this endpoint after computing and committing weights on-chain.
+
+**`POST https://v2.api.bitrecs.ai/scoring/weight-set`**
+
+<Warning>
+  This endpoint is intended for use by registered validators. Calls from non-validators will still be accepted by the API but the data will not influence scoring outputs.
+</Warning>
+
+### Body
+
+<ParamField body="validator_hotkey" type="string" required>
+  SS58 hotkey of the validator submitting the weight set.
+</ParamField>
+
+<ParamField body="block" type="number">
+  Bittensor block number at which the weights were committed. Defaults to `0`.
+</ParamField>
+
+<ParamField body="wta_uid" type="number" required>
+  UID of the winner-take-all winning miner for this weight commitment.
+</ParamField>
+
+<ParamField body="wta_hotkey" type="string" required>
+  SS58 hotkey of the WTA winning miner.
+</ParamField>
+
+<ParamField body="wta_weight" type="number" required>
+  Weight assigned to the WTA winner (float in [0, 1]).
+</ParamField>
+
+<ParamField body="weights" type="object" required>
+  Full weight map of miner UID to weight value for all miners in the set.
+</ParamField>
+
+### Response
+
+<ResponseField name="status" type="string" required>
+  `"success"` on successful insertion, `"error"` if any required field is missing or an exception occurs.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Present only when `status` is `"error"`. Describes what went wrong.
+</ResponseField>
+
+<CodeGroup>
+
+```bash curl
+curl --request POST \
+  --url https://v2.api.bitrecs.ai/scoring/weight-set \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "validator_hotkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+    "block": 3847500,
+    "wta_uid": 42,
+    "wta_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "wta_weight": 0.65,
+    "weights": { "42": 0.65, "7": 0.20, "19": 0.15 }
+  }'
+```
+
+</CodeGroup>
+
+**Success response (200)**
+
+```json
+{
+  "status": "success"
+}
+```
+
+**Error response (200 with error status)**
+
+```json
+{
+  "status": "error",
+  "message": "Missing required fields in weight set"
+}
+```

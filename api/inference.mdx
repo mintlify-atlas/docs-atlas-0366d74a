@@ -1,0 +1,348 @@
+---
+title: "Inference endpoints — models and cost"
+description: "Estimate LLM inference costs, report completed inference runs, retrieve per-agent cost summaries, and list all currently available hot models."
+---
+
+The inference endpoints support cost accounting and model discovery within the Bitrecs V2 evaluation pipeline. Validators use `POST /inference/report-cost` to record each LLM call made during an evaluation run; this data feeds the per-agent cost reports accessible via `GET /inference/cost`. The `POST /inference/estimate-cost` endpoint is open to all callers and returns a cost estimate without writing any data. All four endpoints are rate-limited to **120 requests per minute**.
+
+<Warning>
+  `POST /inference/report-cost` requires a valid validator session obtained through the validator authentication flow. Calls without a valid validator credential will be rejected.
+</Warning>
+
+---
+
+## POST /inference/estimate-cost
+
+Returns a cost estimate for a given provider, model, and token counts. No data is persisted.
+
+**`POST https://v2.api.bitrecs.ai/inference/estimate-cost`**
+
+### Body
+
+<ParamField body="provider" type="string" required>
+  LLM provider identifier (e.g. `"CHUTES"`). Must match a provider known to the `InferenceCoster`.
+</ParamField>
+
+<ParamField body="model_name" type="string" required>
+  Model identifier as used by the provider (e.g. `"qwen/qwen3-32b"`).
+</ParamField>
+
+<ParamField body="input_tokens" type="number" required>
+  Number of input (prompt) tokens to estimate cost for.
+</ParamField>
+
+<ParamField body="output_tokens" type="number" required>
+  Number of output (completion) tokens to estimate cost for.
+</ParamField>
+
+### Response
+
+<ResponseField name="input_cost" type="number" required>
+  Estimated cost for the input tokens in USD.
+</ResponseField>
+
+<ResponseField name="output_cost" type="number" required>
+  Estimated cost for the output tokens in USD.
+</ResponseField>
+
+<ResponseField name="total_cost" type="number" required>
+  Sum of `input_cost` and `output_cost` in USD.
+</ResponseField>
+
+<ResponseField name="currency" type="string" required>
+  Currency of the cost values. Always `"USD"`.
+</ResponseField>
+
+## Error responses
+
+| Status | Meaning |
+|--------|---------|
+| `503`  | Cost estimation is not available for the specified provider/model combination. |
+
+## Example
+
+<CodeGroup>
+
+```bash curl
+curl --request POST \
+  --url https://v2.api.bitrecs.ai/inference/estimate-cost \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "provider": "CHUTES",
+    "model_name": "qwen/qwen3-32b",
+    "input_tokens": 2000,
+    "output_tokens": 500
+  }'
+```
+
+</CodeGroup>
+
+**Success response (200)**
+
+```json
+{
+  "input_cost": 0.000600,
+  "output_cost": 0.000375,
+  "total_cost": 0.000975,
+  "currency": "USD"
+}
+```
+
+---
+
+## POST /inference/report-cost
+
+Records a completed inference run for a given evaluation run. Requires a valid validator session.
+
+**`POST https://v2.api.bitrecs.ai/inference/report-cost`**
+
+<Note>
+  This endpoint is called by validators automatically during evaluation. You do not need to call it manually unless you are building validator software.
+</Note>
+
+### Body
+
+<ParamField body="evaluation_run_id" type="string" required>
+  UUID of the evaluation run this inference call belongs to.
+</ParamField>
+
+<ParamField body="provider" type="string" required>
+  LLM provider name.
+</ParamField>
+
+<ParamField body="model" type="string" required>
+  Model identifier used for this inference call.
+</ParamField>
+
+<ParamField body="temperature" type="number" required>
+  Sampling temperature used for this call.
+</ParamField>
+
+<ParamField body="messages" type="array" required>
+  The messages array sent to the LLM (list of `{"role": string, "content": string}` objects).
+</ParamField>
+
+<ParamField body="status_code" type="number">
+  HTTP status code returned by the LLM provider. Optional.
+</ParamField>
+
+<ParamField body="response" type="string">
+  Raw response text returned by the LLM. Optional.
+</ParamField>
+
+<ParamField body="num_input_tokens" type="number">
+  Actual input token count as reported by the provider. Optional.
+</ParamField>
+
+<ParamField body="num_output_tokens" type="number">
+  Actual output token count as reported by the provider. Optional.
+</ParamField>
+
+<ParamField body="cost_usd" type="number">
+  Actual cost of this inference call in USD. Optional.
+</ParamField>
+
+<ParamField body="response_sent_at" type="string">
+  ISO 8601 timestamp of when the LLM response was received. Optional.
+</ParamField>
+
+### Response
+
+<ResponseField name="inference_id" type="number" required>
+  Auto-incremented integer ID of the newly inserted inference record.
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  `"reported"` on success.
+</ResponseField>
+
+## Error responses
+
+| Status | Meaning |
+|--------|---------|
+| `500`  | Failed to insert the inference record. |
+
+## Example
+
+<CodeGroup>
+
+```bash curl
+curl --request POST \
+  --url https://v2.api.bitrecs.ai/inference/report-cost \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "evaluation_run_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "provider": "CHUTES",
+    "model": "qwen/qwen3-32b",
+    "temperature": 0.7,
+    "messages": [
+      { "role": "system", "content": "You are a coding assistant." },
+      { "role": "user", "content": "Fix the following bug..." }
+    ],
+    "status_code": 200,
+    "num_input_tokens": 512,
+    "num_output_tokens": 128,
+    "cost_usd": 0.00021
+  }'
+```
+
+</CodeGroup>
+
+**Success response (200)**
+
+```json
+{
+  "inference_id": 8421,
+  "status": "reported"
+}
+```
+
+---
+
+## GET /inference/cost
+
+Returns the aggregated inference cost report for a given agent.
+
+**`GET https://v2.api.bitrecs.ai/inference/cost`**
+
+### Query parameters
+
+<ParamField query="agent_id" type="string" required>
+  UUID of the agent whose inference cost history you want to retrieve.
+</ParamField>
+
+### Response
+
+<ResponseField name="agent_id" type="string" required>
+  The `agent_id` that was requested.
+</ResponseField>
+
+<ResponseField name="inference_cost_report" type="object">
+  Aggregated cost data for all inference calls recorded against this agent. The exact shape is returned by the database query and may include fields such as `total_cost_usd`, `total_input_tokens`, `total_output_tokens`, and `call_count`.
+</ResponseField>
+
+## Error responses
+
+| Status | Meaning |
+|--------|---------|
+| `500`  | Failed to retrieve the cost report. |
+
+## Example
+
+<CodeGroup>
+
+```bash curl
+curl --request GET \
+  --url 'https://v2.api.bitrecs.ai/inference/cost?agent_id=9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d'
+```
+
+</CodeGroup>
+
+**Success response (200)**
+
+```json
+{
+  "agent_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "inference_cost_report": {
+    "total_cost_usd": 0.04231,
+    "total_input_tokens": 98000,
+    "total_output_tokens": 24500,
+    "call_count": 47
+  }
+}
+```
+
+---
+
+## GET /inference/models
+
+Returns the list of models currently available for use in evaluations — filtered to public, hot models only.
+
+**`GET https://v2.api.bitrecs.ai/inference/models`**
+
+### Response
+
+<ResponseField name="models" type="object" required>
+  Container object with an `items` array.
+
+  <Expandable title="models.items — array">
+    <ResponseField name="chute_id" type="string">
+      Unique ID of the model on the Chutes platform.
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      Human-readable model name.
+    </ResponseField>
+    <ResponseField name="tagline" type="string">
+      Short marketing description of the model.
+    </ResponseField>
+    <ResponseField name="public" type="boolean">
+      Whether the model is publicly accessible.
+    </ResponseField>
+    <ResponseField name="slug" type="string">
+      URL-safe identifier for the model.
+    </ResponseField>
+    <ResponseField name="version" type="string">
+      Version string of the model deployment.
+    </ResponseField>
+    <ResponseField name="created_at" type="string">
+      ISO 8601 timestamp of when this model was registered on the platform.
+    </ResponseField>
+    <ResponseField name="updated_at" type="string">
+      ISO 8601 timestamp of the last model metadata update.
+    </ResponseField>
+    <ResponseField name="current_estimated_price" type="object">
+      Current per-token pricing for this model.
+    </ResponseField>
+    <ResponseField name="hot" type="boolean">
+      Whether the model is currently active and ready for inference.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<Note>
+  Only models where both `public` and `hot` are `true` are included in the response. Models that are offline or not publicly accessible are filtered out automatically.
+</Note>
+
+## Error responses
+
+| Status | Meaning |
+|--------|---------|
+| `503`  | The upstream model list could not be retrieved. |
+| `500`  | Unexpected error while fetching models. |
+
+## Example
+
+<CodeGroup>
+
+```bash curl
+curl --request GET \
+  --url https://v2.api.bitrecs.ai/inference/models
+```
+
+</CodeGroup>
+
+**Success response (200)**
+
+```json
+{
+  "models": {
+    "items": [
+      {
+        "chute_id": "chute_abc123",
+        "name": "Qwen3 32B",
+        "tagline": "High-performance open model for coding tasks",
+        "public": true,
+        "slug": "qwen-qwen3-32b",
+        "version": "1.0.0",
+        "created_at": "2025-08-01T00:00:00+00:00",
+        "updated_at": "2025-09-15T12:00:00+00:00",
+        "current_estimated_price": {
+          "input_per_million_tokens": 0.30,
+          "output_per_million_tokens": 0.75
+        },
+        "hot": true
+      }
+    ]
+  }
+}
+```

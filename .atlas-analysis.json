@@ -1,0 +1,114 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "Bitrecs V2",
+  "projectDescription": "A Bittensor prompt evolution subnet that rewards miners who optimize LLM artifacts for ecommerce recommendation tasks, evaluated by a winner-takes-all scoring engine.",
+  "theme": "luma",
+  "primaryColor": "#94cb04",
+  "lightColor": "#545454",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "introduction",
+              "how-it-works",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Mining",
+            "pages": [
+              "mining/quickstart",
+              "mining/artifact-reference",
+              "mining/submission-process",
+              "mining/tips"
+            ]
+          },
+          {
+            "group": "Validating",
+            "pages": [
+              "validating/quickstart",
+              "validating/configuration",
+              "validating/docker-setup"
+            ]
+          },
+          {
+            "group": "Scoring",
+            "pages": [
+              "scoring/overview",
+              "scoring/pareto-dominance",
+              "scoring/winner-takes-all",
+              "scoring/decay"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Submission",
+            "pages": [
+              "api/check",
+              "api/submit"
+            ]
+          },
+          {
+            "group": "Agents & Evaluations",
+            "pages": [
+              "api/agents",
+              "api/evaluations",
+              "api/evaluation-runs"
+            ]
+          },
+          {
+            "group": "Scoring & Statistics",
+            "pages": [
+              "api/scoring",
+              "api/statistics"
+            ]
+          },
+          {
+            "group": "Inference",
+            "pages": [
+              "api/inference"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Prompt evolution subnet on Bittensor (Netuid 122/296)",
+    "Winner-takes-all (WTA) scoring with ε-Pareto dominance",
+    "Miner artifact submission via GitHub Gist and onchain commitment",
+    "Multi-stage evaluation pipeline (Screener 1, Screener 2, Validator)",
+    "Support for CHUTES and OpenRouter LLM providers",
+    "Cosine similarity deduplication for artifact submissions",
+    "Linear decay emissions with 3-day grace period and 25% floor",
+    "Docker-based validator deployment with Watchtower auto-updates",
+    "FastAPI backend with rate limiting and API key authentication"
+  ],
+  "publicApiSurface": [
+    "POST /check — validate miner submission eligibility",
+    "POST /submit — submit miner artifact with onchain commitment",
+    "GET /agent/get-by-evaluation-run-id — retrieve agent by evaluation run",
+    "GET /agent/get-gist-info — retrieve gist info for an agent",
+    "GET /scoring/latest — get latest miner scores",
+    "GET /scoring/pareto — get Pareto frontier data",
+    "GET /scoring/wta — get winner-takes-all weights",
+    "GET /scoring/screener-info — get screener thresholds and averages",
+    "GET /scoring/constants — get scoring constants",
+    "POST /inference/estimate-cost — estimate LLM inference cost",
+    "POST /inference/report-cost — report inference run cost",
+    "GET /inference/cost — get inference cost report for agent",
+    "GET /inference/models — list available LLM models",
+    "GET /statistics/problem-statistics — get problem set statistics",
+    "GET /health — API health check",
+    "bitrecs_cli.py upload — CLI command to upload miner artifact"
+  ]
+}

@@ -1,0 +1,265 @@
+---
+title: "Artifact YAML reference for Bitrecs miners"
+description: "Field-by-field reference for the artifact.yaml format: required values, template variables, sampling parameters, fewshot examples, and JSON output rules."
+keywords: ["bitrecs", "artifact", "yaml", "reference", "prompt template", "jinja2", "sampling params", "fewshot", "miner"]
+---
+
+The artifact is the central unit of work for a Bitrecs miner. It is a YAML file that encodes everything the evaluation harness needs to run your submission: which model and provider to use, the Jinja2 templates that will be rendered at inference time, and the sampling parameters that control generation. Getting the artifact right is a prerequisite for passing the screener stages and reaching full validator evaluation.
+
+## Complete example
+
+The following is the canonical reference artifact from the repository. Every field shown here is described in detail in the sections below.
+
+```yaml artifact.yaml
+name: "bitrecs recommender"
+version_num: "1"
+status: "screening_1"
+miner_hotkey: "5F95Nub62Fhwy3UFBMWg5eDou1B45yrzXaa7FjgXMALcER6r"
+provider: "CHUTES"
+model: "qwen/qwen3-next-80b-a3b-instruct"
+
+system_prompt_template: |
+  You are a shopping assistant, today's date is {{current_date}}.
+user_prompt_template: |
+   # SCENARIO
+    You are an ecommerce recommender with deep expertise in store catalog, product attributes, user behavior, and seasonal trends.
+    A customer is shopping on your website, build a basket of {{num_recs}} product recommendations with no duplicates based on the provided context and utilizing your persona attributes.
+
+    # YOUR PERSONA
+    <persona>{{persona}}</persona>
+
+    # YOUR ROLE
+    - Achievements: salesperson of the year, expert product recommender
+    - Recommend **{{num_recs}}** products (A -> B,Y,Z)
+    - Increase average order value and conversion rate
+    - Use deep product catalog knowledge
+    - Understand product attributes and revenue impact
+    - Avoid variant duplicates (same product in different colors/sizes)
+
+    # YOUR TASK
+    Recommend **{{num_recs}}** unique products from the context for the customer.
+    The product name can contain important information like which category it belongs to, sometimes denoted by | characters indicating the category hierarchy.
+    Leverage the complete information ecosystem - product catalog, user context, seasonal trends, pricing considerations and your expert role as a {{persona}} - and return {{num_recs}} recommendations.
+    Apply comprehensive analysis using all available inputs: product attributes from the context, user cart and order history, seasonality, seasonal events, pricing considerations and your personas core_attributes to return a cohesive recommendation set.
+    Do **not** recommend products that are already in the cart or from past orders.
+    Ensure the recommendations are relevant to the Viewing SKU (if present) and maintain gender consistency.
+    If {{sku}} is NA or not provided, then focus on general recommendations based on cart and order history.
+
+    # CUSTOMER CONTEXT
+    Viewing SKU: <sku>{{sku}}</sku><sku_info>{{sku_info}}</sku_info>
+    Cart items: <cart>{{cart_json}}</cart>
+    Past Orders: <orders>{{order_json}}</orders>
+
+    Available products:
+    <context>
+    {{product_catalog}}
+    </context>
+
+    # OUTPUT REQUIREMENTS
+    - Return ONLY a JSON array.
+    - NO Python dictionary syntax (no single quotes).
+    - Each item must be valid JSON with: "sku": "...", "name": "...", "price": "...", "reason": "..."
+    - Each item must have: sku, name, price and reason.
+    - Must return exactly {{num_recs}} items.
+    - Return items MUST exist in context.
+    - Return items must NOT exist in the cart or from previous orders.
+    - No duplicates.
+    - No explanations or text outside the JSON array.
+
+sampling_params:
+  temperature: 0.2
+```
+
+## Top-level fields
+
+<ParamField body="name" type="string" required>
+  A short human-readable label for your artifact. Must be 1–30 alphanumeric characters (letters, numbers, and spaces only — no special characters or punctuation). Used to identify your submission in the dashboard.
+
+  ```yaml
+  name: "bitrecs recommender"
+  ```
+</ParamField>
+
+<ParamField body="version_num" type="string" required default="1">
+  The artifact schema version. Must be the string `"1"`. Any other value will be rejected by the validator.
+
+  ```yaml
+  version_num: "1"
+  ```
+</ParamField>
+
+<ParamField body="status" type="string" required default="screening_1">
+  The initial lifecycle status of the artifact. Must be `"screening_1"` on submission. The platform advances the status automatically as the artifact moves through the evaluation pipeline (`screening_2`, `evaluating`, `finished`).
+
+  ```yaml
+  status: "screening_1"
+  ```
+</ParamField>
+
+<ParamField body="miner_hotkey" type="string" required>
+  Your hotkey's ss58 address. Must match the hotkey you use to sign the submission. The platform uses this to verify ownership and enforce the one-submission-per-hotkey rule.
+
+  ```yaml
+  miner_hotkey: "5F95Nub62Fhwy3UFBMWg5eDou1B45yrzXaa7FjgXMALcER6r"
+  ```
+</ParamField>
+
+<ParamField body="provider" type="string" required>
+  The LLM inference provider to use. Only `CHUTES` is accepted. Any other value will be rejected by the validator.
+
+  ```yaml
+  provider: "CHUTES"
+  ```
+</ParamField>
+
+<ParamField body="model" type="string" required>
+  The model identifier string recognized by your chosen provider. Must be a model priced below **$1 per million tokens**. Free tier models (identifiers containing `:free`) are not accepted.
+
+  ```yaml
+  model: "qwen/qwen3-next-80b-a3b-instruct"
+  ```
+</ParamField>
+
+<ParamField body="system_prompt_template" type="string" required>
+  A Jinja2 template rendered as the system message. Must be a valid Jinja2 template and must not exceed **5,000 tokens**. Must contain at least one valid template variable. See [Template variables](#template-variables) below.
+
+  ```yaml
+  system_prompt_template: |
+    You are a shopping assistant, today's date is {{current_date}}.
+  ```
+</ParamField>
+
+<ParamField body="user_prompt_template" type="string" required>
+  A Jinja2 template rendered as the user message. Must be a valid Jinja2 template and must not exceed **10,000 tokens**. The variables `product_catalog`, `cart_json`, and `order_json` may each appear at most once across both templates combined. See [Template variables](#template-variables) below.
+
+  ```yaml
+  user_prompt_template: |
+    Recommend {{num_recs}} products for the customer.
+    Available products: {{product_catalog}}
+  ```
+</ParamField>
+
+<ParamField body="sampling_params" type="object" required>
+  Controls how the model generates output. See [Sampling parameters](#sampling-parameters) below.
+</ParamField>
+
+<ParamField body="fewshot_examples" type="array">
+  Optional list of few-shot message examples prepended to the conversation. Maximum **64** examples. Each example has a `role` (`user`, `assistant`, or `system`) and `content` (max 8,192 characters per example).
+
+  ```yaml
+  fewshot_examples:
+    - role: "user"
+      content: "Recommend 3 products for someone viewing rain boots."
+    - role: "assistant"
+      content: '[{"sku": "XYZ", "name": "Rain Jacket", "price": "89", "reason": "Pairs well with rain boots"}]'
+  ```
+</ParamField>
+
+## Sampling parameters
+
+The `sampling_params` object controls LLM generation behavior. `temperature` is the primary parameter the evaluation harness uses.
+
+<ParamField body="sampling_params.temperature" type="number" required>
+  Controls output randomness. Range: `0` to `2`. Lower values produce more deterministic output. The example artifact uses `0.2`, which is a good starting point for structured JSON generation.
+
+  ```yaml
+  sampling_params:
+    temperature: 0.2
+  ```
+</ParamField>
+
+<ParamField body="sampling_params.top_p" type="number">
+  Nucleus sampling threshold. Range: `0` to `1`. Optional. When set, only the top tokens whose cumulative probability reaches `top_p` are considered.
+
+  ```yaml
+  sampling_params:
+    temperature: 0.5
+    top_p: 0.9
+  ```
+</ParamField>
+
+<ParamField body="sampling_params.max_tokens" type="number">
+  Maximum number of tokens to generate. Optional. Must be a positive integer.
+
+  ```yaml
+  sampling_params:
+    temperature: 0.2
+    max_tokens: 2048
+  ```
+</ParamField>
+
+<ParamField body="sampling_params.stop_sequences" type="array">
+  List of strings that cause generation to stop when encountered. Optional.
+
+  ```yaml
+  sampling_params:
+    temperature: 0.5
+    stop_sequences: ["\n\n"]
+  ```
+</ParamField>
+
+## Template variables
+
+Both `system_prompt_template` and `user_prompt_template` are rendered as [Jinja2](https://jinja.palletsprojects.com/) templates. Use `{{variable_name}}` syntax to inject context values. Only the variables listed below are recognized; any other variable names will cause validation to fail.
+
+| Variable | Description |
+|---|---|
+| `{{current_date}}` | Today's date, injected at inference time. |
+| `{{num_recs}}` | The number of recommendations the model must return. |
+| `{{persona}}` | A persona description representing the customer's shopping profile. |
+| `{{sku}}` | The product SKU the customer is currently viewing. May be `NA` if no product page context is available. |
+| `{{sku_info}}` | Detailed attributes for the viewed SKU (name, price, description, category). |
+| `{{cart_json}}` | JSON representation of the customer's current cart. |
+| `{{order_json}}` | JSON representation of the customer's past orders. |
+| `{{product_catalog}}` | The candidate product pool for recommendations. |
+
+<Warning>
+  `product_catalog`, `cart_json`, and `order_json` may each appear **at most once** across both prompt templates combined. Using any of these variables more than once will cause validation to fail.
+</Warning>
+
+### Jinja2 syntax
+
+Templates support standard Jinja2 syntax including conditionals and loops:
+
+```jinja2
+{% if sku != 'NA' %}
+The customer is viewing: {{sku_info}}
+{% endif %}
+
+{% for item in cart_json %}
+Cart item: {{item}}
+{% endfor %}
+```
+
+Keep templates as straightforward as possible — complex control flow increases token count and can cause unexpected rendering at evaluation time.
+
+## Output requirements
+
+Your model must return a valid JSON array. Each element must include exactly these four string fields:
+
+```json
+[
+  {
+    "sku": "XYZ",
+    "name": "Hunter Original Play Boot Chelsea",
+    "price": "115",
+    "reason": "User is viewing rainboots, we recommend this alternative pair of rainboots which is our best seller"
+  },
+  {
+    "sku": "ABC",
+    "name": "Men's Lightweight Hooded Rain Jacket",
+    "price": "149",
+    "reason": "Since the user is looking at mens rainboots, given the season a mens raincoat should be a good fit"
+  }
+]
+```
+
+The evaluation harness enforces all of the following:
+
+- Exactly `{{num_recs}}` items returned — no more, no fewer.
+- Every item's `sku` must exist in the `product_catalog` provided.
+- No item already in the customer's cart or past orders.
+- No duplicate SKUs in the result set.
+- No text outside the JSON array (no explanations, markdown fences, or preamble).
+- Reasons must be plain text — no punctuation, single-line.
+- Gender consistency: if the viewed SKU is gendered, all recommendations should match that gender.

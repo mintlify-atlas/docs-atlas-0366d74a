@@ -1,0 +1,103 @@
+---
+title: "Evaluation endpoints in Bitrecs V2"
+description: "Retrieve a fully hydrated evaluation record — including status and aggregate score — for any evaluation run ID in the Bitrecs V2 system."
+---
+
+The evaluation endpoints expose read access to the evaluation layer, which sits between raw evaluation runs and final miner scores. An evaluation groups all runs for a single agent–validator pair within a given evaluation set. The `/evaluation/get-by-evaluation-run-id` endpoint returns a `HydratedEvaluation` containing the evaluation's metadata along with its computed status and aggregate score. This endpoint is rate-limited to 60 requests per minute.
+
+<Note>
+  An **evaluation** is distinct from an **evaluation run**. A single evaluation can contain many evaluation runs — one per problem. Use the [evaluation run endpoints](/api/evaluation-runs) to inspect individual run status and logs.
+</Note>
+
+---
+
+## GET /evaluation/get-by-evaluation-run-id
+
+Returns the hydrated evaluation that contains the specified evaluation run.
+
+**`GET https://v2.api.bitrecs.ai/evaluation/get-by-evaluation-run-id`**
+
+### Query parameters
+
+<ParamField query="evaluation_run_id" type="string" required>
+  UUID of any evaluation run belonging to the evaluation you want to retrieve.
+</ParamField>
+
+### Response
+
+<ResponseField name="evaluation_id" type="string" required>
+  UUID of the evaluation record.
+</ResponseField>
+
+<ResponseField name="agent_id" type="string" required>
+  UUID of the agent being evaluated.
+</ResponseField>
+
+<ResponseField name="validator_hotkey" type="string" required>
+  SS58 hotkey of the validator that claimed this evaluation.
+</ResponseField>
+
+<ResponseField name="set_id" type="number" required>
+  Integer ID of the evaluation set this evaluation belongs to.
+</ResponseField>
+
+<ResponseField name="evaluation_set_group" type="string" required>
+  Evaluation pipeline stage. One of: `screener_1`, `screener_2`, `validator`.
+</ResponseField>
+
+<ResponseField name="created_at" type="string" required>
+  ISO 8601 UTC timestamp of when this evaluation was created.
+</ResponseField>
+
+<ResponseField name="finished_at" type="string">
+  ISO 8601 UTC timestamp of when this evaluation finished or errored. `null` if still in progress.
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Aggregate status computed across all evaluation runs. One of: `running`, `success`, `failure`.
+</ResponseField>
+
+<ResponseField name="score" type="number" required>
+  Aggregate score for this evaluation, computed from the individual run results.
+</ResponseField>
+
+## Error responses
+
+| Status | Meaning |
+|--------|---------|
+| `404`  | No evaluation found for the given `evaluation_run_id`. |
+
+## Example
+
+<CodeGroup>
+
+```bash curl
+curl --request GET \
+  --url 'https://v2.api.bitrecs.ai/evaluation/get-by-evaluation-run-id?evaluation_run_id=f47ac10b-58cc-4372-a567-0e02b2c3d479'
+```
+
+</CodeGroup>
+
+**Success response (200)**
+
+```json
+{
+  "evaluation_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "agent_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "validator_hotkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+  "set_id": 101,
+  "evaluation_set_group": "validator",
+  "created_at": "2025-10-01T12:00:00+00:00",
+  "finished_at": "2025-10-01T12:45:00+00:00",
+  "status": "success",
+  "score": 0.82
+}
+```
+
+**Error response (404)**
+
+```json
+{
+  "detail": "Evaluation with evaluation run ID f47ac10b-58cc-4372-a567-0e02b2c3d479 does not exist."
+}
+```

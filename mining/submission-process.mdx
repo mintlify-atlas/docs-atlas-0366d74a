@@ -1,0 +1,160 @@
+---
+title: "Submitting an artifact to Bitrecs V2"
+description: "How the Bitrecs submission flow works: eligibility checks, onchain commitment, a 12-second reveal wait, transport signature, and final API validation."
+keywords: ["bitrecs", "submission", "onchain", "commitment", "reveal", "signature", "gist", "hotkey", "eligibility"]
+---
+
+Submitting an artifact to Bitrecs V2 is not a simple API call. Before your artifact enters the evaluation queue, the platform performs a series of eligibility checks, requires you to make an onchain commitment to the Bittensor chain, and then verifies a transport signature before accepting the final submission. This design ensures that every artifact is tied to a registered, non-banned hotkey and that the submission cannot be replayed or spoofed.
+
+The CLI handles all of these steps automatically, but understanding the flow helps you troubleshoot failures and reason about timing.
+
+## Overview
+
+```
+1. Local validation (CLI)
+         ↓
+2. POST /check  ← eligibility check against the API
+         ↓
+3. Onchain commitment (btcli commitment write)
+         ↓
+4. ~12 second reveal wait
+         ↓
+5. POST /submit  ← signed artifact delivery
+         ↓
+6. Evaluation queue
+```
+
+## Step 1: Local validation
+
+Before contacting the API, the CLI validates your Gist and artifact locally. Two validators run in sequence:
+
+**Gist validator** (`rules/gist_validator.py`):
+- Gist ID must not be empty.
+- Gist must have been created within the last **24 hours**.
+- Gist must have exactly **1 commit** — any editing after creation adds a second commit and permanently disqualifies the Gist.
+
+**Artifact template validator** (`rules/agent_validator.py`):
+- `name` must be 1–30 alphanumeric characters.
+- `version_num` must be `1`.
+- `status` must be `"screening_1"`.
+- `provider` must be a supported value (currently `CHUTES`).
+- Model identifier must not contain `:free`.
+- Both templates must be valid Jinja2 syntax.
+- Templates must use only [recognized variables](/mining/artifact-reference#template-variables).
+- `product_catalog`, `cart_json`, and `order_json` may each appear at most once across both templates.
+- `system_prompt_template` must not exceed 5,000 tokens.
+- `user_prompt_template` must not exceed 10,000 tokens.
+
+If either validator fails, the CLI prints the rejection reason and exits without contacting the API.
+
+## Step 2: Eligibility check (POST /check)
+
+The CLI POSTs a `MinerSubmission` payload to `POST /check` at `https://v2.api.bitrecs.ai`. The platform verifies:
+
+- The hotkey is **registered** on the subnet.
+- The hotkey is **not banned**.
+- The hotkey has **not already submitted** an artifact (one submission per hotkey).
+- The Gist ID has **not already been submitted** by any miner.
+- The Gist was created **within the last 24 hours** (re-checked server-side).
+- The Gist has exactly **one commit** (re-checked server-side).
+
+The submission payload sent to `/check`:
+
+```json
+{
+  "created_at": "2026-04-14T10:00:00+00:00",
+  "github_account": "your_github_account",
+  "gist_id": "abc123def456",
+  "hotkey": "5F95Nub62Fhwy3UFBMWg5eDou1B45yrzXaa7FjgXMALcER6r",
+  "signature": "<hotkey signature over preamble>"
+}
+```
+
+The `signature` field is computed by the CLI as:
+
+```
+preamble = f"{gist_created_at.isoformat()}:{github_account}:{gist_id}:{hotkey_ss58}"
+signature = hotkey.sign(preamble).hex()
+```
+
+This proves ownership of the hotkey without requiring the coldkey to be online during the request.
+
+If `/check` returns a non-200 response, the CLI prints the error and stops. Nothing has been written to the chain at this point.
+
+## Step 3: Onchain commitment
+
+After the eligibility check passes, the CLI commits the `github_account` and `gist_id` to the Bittensor chain using `commit_to_chain_with_reveal`. This is a standard Bittensor commitment transaction: it anchors your submission to a specific block height and proves that you had the Gist at that time.
+
+The commitment transaction can take up to **1 minute** depending on chain congestion. The CLI displays a spinner during this step. Do not interrupt the process.
+
+```
+Committing to chain...this can take up to 1 minute
+✓ Commitment to chain successful on block 4521893!
+```
+
+## Step 4: Reveal wait
+
+After the onchain commitment confirms, the CLI waits **approximately 12 seconds** before submitting to the API. This is the reveal period — a short window during which the chain can process and finalize your commitment before the API reads it.
+
+```
+Waiting for reveal ...
+```
+
+## Step 5: Transport signature and POST /submit
+
+Once the reveal period has elapsed, the CLI generates a transport signature and POSTs to `POST /submit`. The transport signature is separate from the submission signature: it proves that the request originated from the same wallet that made the onchain commitment and was generated at the time of submission (not replayed).
+
+The transport signature uses a nonce and Unix timestamp, and is included in HTTP headers:
+
+| Header | Description |
+|---|---|
+| `X-Signature` | Transport signature over the submission payload, nonce, and timestamp. |
+| `X-Timestamp` | Unix timestamp of the request. |
+| `X-Nonce` | Random 16-byte hex nonce. |
+| `X-T-Nonce` | Nonce component signed by the hotkey. |
+
+The API re-validates all eligibility checks and verifies both signatures before accepting the submission.
+
+## After submission
+
+On a successful `201` response, the CLI prints your artifact ID and a dashboard URL:
+
+```
+Upload Complete
+Artifact uploaded successfully!
+
+The your_account/abc123def456 artifact has been uploaded and is queued for evaluation.
+Your artifact ID is: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+View your artifact here: https://dashboard.bitrecs.ai/agent/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+The response also includes a **similarity check** result. If your artifact's prompt embeddings are too close to an existing submission, the platform flags it. You can still see the similar agent IDs in the response details.
+
+After acceptance, the artifact enters the evaluation pipeline:
+
+1. **Screener 1** — basic data quality and format checks.
+2. **Screener 2** — extended quality evaluation.
+3. **Validator queue** — full inference-based evaluation across rotating ecommerce scenarios.
+
+## Full CLI command reference
+
+```bash
+uv run bitrecs_cli.py upload \
+  --github-account YOUR_GITHUB_ACCOUNT \
+  --gist-id YOUR_GIST_ID \
+  --coldkey-name default \
+  --hotkey-name default \
+  --netuid 122
+```
+
+| Flag | Description |
+|---|---|
+| `--github-account` | Your GitHub username (owner of the Gist). |
+| `--gist-id` | The Gist ID from the Gist URL. |
+| `--coldkey-name` | Name of your Bittensor coldkey wallet (default: `default`). |
+| `--hotkey-name` | Name of your Bittensor hotkey (default: `default`). |
+| `--netuid` | Subnet UID. Use `122` for mainnet, `296` for testnet. Defaults to `122`. |
+
+<Note>
+  If `--netuid` is not passed, the CLI will check the `NETUID` environment variable. If neither is set, it prompts interactively and defaults to `122`.
+</Note>

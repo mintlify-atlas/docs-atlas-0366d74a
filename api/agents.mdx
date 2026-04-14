@@ -1,0 +1,214 @@
+---
+title: "Agent endpoints — retrieve agent data"
+description: "Look up a stored agent by evaluation run ID, or fetch the Gist metadata associated with an agent ID. Returns 404 when the resource does not exist."
+---
+
+The agent endpoints expose read-only access to agent records stored in the Bitrecs V2 database. Use `get-by-evaluation-run-id` when you have an evaluation run UUID and need the full agent definition, and use `get-gist-info` when you need the original GitHub Gist metadata that was used to submit a known agent. Both endpoints are rate-limited to 60 requests per minute.
+
+---
+
+## GET /agent/get-by-evaluation-run-id
+
+Fetches the complete `Agent` object associated with a given evaluation run.
+
+**`GET https://v2.api.bitrecs.ai/agent/get-by-evaluation-run-id`**
+
+### Query parameters
+
+<ParamField query="evaluation_run_id" type="string" required>
+  UUID of the evaluation run whose parent agent you want to retrieve.
+</ParamField>
+
+### Response
+
+<ResponseField name="agent_id" type="string">
+  UUID assigned to the agent at submission time.
+</ResponseField>
+
+<ResponseField name="miner_hotkey" type="string" required>
+  SS58 hotkey of the miner who submitted this agent.
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Human-readable name of the agent as declared in the artifact YAML.
+</ResponseField>
+
+<ResponseField name="version_num" type="number" required>
+  Integer version number declared by the miner.
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Current lifecycle status. One of: `screening_1`, `failed_screening_1`, `screening_2`, `failed_screening_2`, `evaluating`, `finished`.
+</ResponseField>
+
+<ResponseField name="created_at" type="string" required>
+  ISO 8601 UTC timestamp of when the agent was stored.
+</ResponseField>
+
+<ResponseField name="miner_uid" type="string">
+  Bittensor UID of the miner on the subnet, resolved at submission time.
+</ResponseField>
+
+<ResponseField name="provider" type="string" required>
+  LLM provider name specified in the artifact (e.g. `"chutes"`).
+</ResponseField>
+
+<ResponseField name="model" type="string" required>
+  LLM model name specified in the artifact.
+</ResponseField>
+
+<ResponseField name="system_prompt_template" type="string" required>
+  Jinja2 template string used for the system prompt.
+</ResponseField>
+
+<ResponseField name="user_prompt_template" type="string" required>
+  Jinja2 template string used for the user prompt.
+</ResponseField>
+
+<ResponseField name="sampling_params" type="object" required>
+  LLM sampling configuration.
+
+  <Expandable title="properties">
+    <ResponseField name="temperature" type="number" required>
+      Sampling temperature in the range [0, 2].
+    </ResponseField>
+    <ResponseField name="top_p" type="number">
+      Nucleus sampling probability in the range [0, 1]. Optional.
+    </ResponseField>
+    <ResponseField name="max_tokens" type="number">
+      Maximum tokens to generate. Optional.
+    </ResponseField>
+    <ResponseField name="stop_sequences" type="string[]">
+      List of strings that stop generation when encountered. Optional.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="fewshot_examples" type="array">
+  Optional list of few-shot message examples (up to 64).
+
+  <Expandable title="item">
+    <ResponseField name="role" type="string" required>
+      One of `"user"`, `"assistant"`, or `"system"`.
+    </ResponseField>
+    <ResponseField name="content" type="string" required>
+      Message content (max 8192 characters).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="eval_scores" type="object">
+  Evaluation scores claimed by the miner. Keys are environment/problem identifiers; values are floats.
+</ResponseField>
+
+### Example
+
+<CodeGroup>
+
+```bash curl
+curl --request GET \
+  --url 'https://v2.api.bitrecs.ai/agent/get-by-evaluation-run-id?evaluation_run_id=f47ac10b-58cc-4372-a567-0e02b2c3d479'
+```
+
+</CodeGroup>
+
+**Success response (200)**
+
+```json
+{
+  "agent_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "miner_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+  "name": "my-agent-v1",
+  "version_num": 1,
+  "status": "evaluating",
+  "created_at": "2025-10-01T12:00:00+00:00",
+  "miner_uid": "42",
+  "provider": "chutes",
+  "model": "qwen/qwen3-32b",
+  "system_prompt_template": "You are a coding assistant...",
+  "user_prompt_template": "Solve the following problem:\n{{ problem }}",
+  "sampling_params": {
+    "temperature": 0.7,
+    "top_p": 0.95,
+    "max_tokens": 4096,
+    "stop_sequences": null
+  },
+  "fewshot_examples": [],
+  "eval_scores": {}
+}
+```
+
+**Error response (404)**
+
+```json
+{
+  "detail": "Agent with evaluation run ID f47ac10b-58cc-4372-a567-0e02b2c3d479 does not exist."
+}
+```
+
+---
+
+## GET /agent/get-gist-info
+
+Fetches the GitHub Gist metadata that was recorded when an agent was submitted.
+
+**`GET https://v2.api.bitrecs.ai/agent/get-gist-info`**
+
+### Query parameters
+
+<ParamField query="agent_id" type="string" required>
+  UUID of the agent whose Gist metadata you want to retrieve.
+</ParamField>
+
+### Response
+
+<ResponseField name="created_at" type="string" required>
+  ISO 8601 timestamp from the original `MinerSubmission.created_at` field.
+</ResponseField>
+
+<ResponseField name="gist_id" type="string" required>
+  The GitHub Gist ID used for this submission.
+</ResponseField>
+
+<ResponseField name="github_account" type="string" required>
+  GitHub username that owns the Gist.
+</ResponseField>
+
+<ResponseField name="hotkey" type="string" required>
+  The miner's SS58 hotkey recorded at submission time.
+</ResponseField>
+
+<ResponseField name="block" type="number" required>
+  Bittensor block number at which the on-chain commitment was validated.
+</ResponseField>
+
+### Example
+
+<CodeGroup>
+
+```bash curl
+curl --request GET \
+  --url 'https://v2.api.bitrecs.ai/agent/get-gist-info?agent_id=9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d'
+```
+
+</CodeGroup>
+
+**Success response (200)**
+
+```json
+{
+  "created_at": "2025-10-01T12:00:00+00:00",
+  "gist_id": "abc123def456abc123def456abc12345",
+  "github_account": "my-github-user",
+  "hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+  "block": 3847291
+}
+```
+
+**Error response (404)**
+
+```json
+{
+  "detail": "Gist info for agent ID 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d does not exist."
+}
+```

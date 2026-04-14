@@ -1,0 +1,150 @@
+---
+title: "Pareto dominance and the scoring frontier"
+description: "How Bitrecs V2 uses ε-Pareto dominance across task environments to identify the best-performing miners and protect against Sybil copying."
+---
+
+After all miner artifacts complete validator evaluation, Bitrecs V2 identifies which miners are genuinely best by computing the ε-Pareto frontier. A miner is on the frontier if no other miner outperforms it across all task environments simultaneously. Only frontier miners participate in winner-takes-all scoring — dominated miners receive no emissions regardless of their absolute scores.
+
+## What Pareto dominance means
+
+In a multi-environment setting each miner has a score vector: one score per task environment. Miner **A** dominates miner **B** when:
+
+1. A scores at least as well as B on **every** environment (within a small tolerance ε).
+2. A scores strictly better than B on **at least one** environment.
+
+If neither miner dominates the other, they are considered incomparable and both remain on the frontier.
+
+<Info>
+  Domination requires improvement on at least one dimension — a perfect copy of another miner's scores produces a tie, not dominance. Copying is therefore useless: it will never earn emissions.
+</Info>
+
+## Epsilon tolerance
+
+Raw scores carry sampling noise. Without a tolerance band, two miners with statistically identical scores could incorrectly dominate each other depending on the exact samples used. Bitrecs V2 addresses this with per-environment epsilon values computed from the standard error of observed scores:
+
+```python
+# scoring/pareto.py
+def compute_epsilon(
+    values: np.ndarray,
+    n_samples: int,
+    min_epsilon: float = MIN_EPSILON,   # 0.005
+    max_epsilon: float = MAX_EPSILON,   # 0.05
+) -> float:
+    if n_samples <= 1:
+        return max_epsilon
+
+    std = np.std(values)
+    se = std / np.sqrt(n_samples)
+
+    # Use 2 standard errors for 95% confidence
+    epsilon = 2 * se
+
+    return float(np.clip(epsilon, min_epsilon, max_epsilon))
+```
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `MIN_EPSILON` | `0.005` | Floor: even with many samples, a 0.5 pp gap is required |
+| `MAX_EPSILON` | `0.05` | Ceiling: with very few samples, tolerance never exceeds 5 pp |
+
+<Tip>
+  More evaluation samples → smaller epsilon → it becomes easier to dominate, rewarding miners who run on a well-sampled subnet.
+</Tip>
+
+## The dominance check
+
+The core dominance function applies epsilon symmetrically:
+
+```python
+# scoring/pareto.py
+def epsilon_dominates(
+    a_scores: np.ndarray,
+    b_scores: np.ndarray,
+    epsilons: np.ndarray,
+) -> bool:
+    # A must be >= B - ε on all environments (not worse within tolerance)
+    if not np.all(a_scores >= b_scores - epsilons):
+        return False
+
+    # A must be > B + ε on at least one environment (strictly better)
+    if not np.any(a_scores > b_scores + epsilons):
+        return False
+
+    return True
+```
+
+<Note>
+  The first condition allows A to fall slightly behind B on some environments (within ε) while still potentially dominating. The second condition ensures at least one genuine improvement exceeds the noise band.
+</Note>
+
+## Computing the frontier
+
+`compute_pareto_frontier` builds a score matrix, computes per-environment epsilons, and fills an `n_miners × n_miners` dominance matrix. A miner is on the frontier if no column in the dominance matrix shows it being dominated:
+
+```python
+# scoring/pareto.py
+def compute_pareto_frontier(
+    miner_scores: MinerScores,
+    env_ids: list[EnvironmentId],
+    n_samples_per_env: int | dict[EnvironmentId, int],
+) -> ParetoResult:
+    # ...
+    # Build score matrix: (n_miners, n_environments)
+    score_matrix = np.zeros((n_miners, n_envs), dtype=np.float32)
+    for i, uid in enumerate(uids):
+        for j, env_id in enumerate(env_ids):
+            score_matrix[i, j] = miner_scores.get(uid, {}).get(env_id, 0.0)
+
+    # Compute dominance matrix
+    dominance = np.zeros((n_miners, n_miners), dtype=bool)
+    for i in range(n_miners):
+        for j in range(n_miners):
+            if i != j:
+                dominance[i, j] = epsilon_dominates(
+                    score_matrix[i], score_matrix[j], epsilons
+                )
+
+    # Frontier = miners not dominated by anyone
+    is_dominated = np.any(dominance, axis=0)
+    frontier_indices = np.where(~is_dominated)[0]
+    frontier_uids = [uids[i] for i in frontier_indices]
+    # ...
+```
+
+The result is a `ParetoResult` dataclass containing:
+
+- **`frontier_uids`** — list of UIDs that are not dominated by any other miner.
+- **`dominance_matrix`** — boolean matrix where `dominance[i, j] = True` means miner `i` dominates miner `j`.
+- **`epsilons`** — the per-environment tolerance values used.
+- **`score_matrix`** — raw score matrix for reference.
+- **`uid_mapping`** — maps matrix row indices back to UIDs.
+
+## Why only frontier miners can win
+
+After the frontier is computed, the engine filters scores to frontier miners only before running WTA:
+
+```python
+# scoring/engine.py
+pareto_result = compute_pareto_frontier(miner_scores, envs, samples)
+frontier_uids = set(pareto_result.frontier_uids)
+filtered_scores = {uid: s for uid, s in miner_scores.items() if uid in frontier_uids}
+
+subset_scores = compute_subset_scores_with_priority(filtered_scores, ...)
+weights = scores_to_weights(subset_scores)
+```
+
+This means a miner with excellent absolute scores on some environments but poor scores on others will be dominated by a more balanced miner and excluded from weight consideration entirely.
+
+<Warning>
+  Being on the frontier is a necessary but not sufficient condition to receive emissions. Among frontier miners, WTA scoring selects a single winner per evaluation round.
+</Warning>
+
+## Inspecting the frontier
+
+The `/scoring/pareto` API endpoint exposes the current frontier for the active evaluation set:
+
+```bash
+GET /scoring/pareto
+```
+
+The response includes `frontier_uids`, the full `dominance_matrix` (first 10 rows), per-miner `on_frontier` flags, and average scores for each miner.

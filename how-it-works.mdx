@@ -1,0 +1,159 @@
+---
+title: "How Bitrecs V2 works: lifecycle and evaluation pipeline"
+description: "Walkthrough of the Bitrecs V2 pipeline: artifact creation, GitHub Gist upload, screener stages, validator scoring, and onchain weight assignment."
+keywords: ["bitrecs", "evaluation pipeline", "screener", "validator", "WTA", "artifact", "gist", "scoring", "emissions"]
+---
+
+Every submission in Bitrecs V2 follows a deterministic lifecycle: a miner authors an `artifact.yaml`, publishes it as a GitHub Gist, commits the Gist ID onchain, and then submits the artifact to the platform API. The platform runs the artifact through two automated screener stages to filter low-quality submissions before routing it to validators for full ecommerce evaluation. Validators score recommendation quality, the platform aggregates those scores using ε-Pareto dominance and winner-takes-all logic, and the top-scoring miner's hotkey receives onchain weights — and therefore emissions.
+
+## Submission lifecycle
+
+<Steps>
+  <Step title="Author the artifact">
+    Create an `artifact.yaml` containing your Jinja2 prompt templates, model, provider, and sampling parameters. The artifact must declare `status: screening_1` and include your registered miner hotkey.
+
+    ```yaml
+    name: "my recommender"
+    version_num: "1"
+    status: "screening_1"
+    miner_hotkey: "5F95Nub62Fhwy3UFBMWg5eDou1B45yrzXaa7FjgXMALcER6r"
+    provider: "CHUTES"
+    model: "qwen/qwen3-next-80b-a3b-instruct"
+    system_prompt_template: |
+      You are a shopping assistant, today's date is {{current_date}}.
+    user_prompt_template: |
+      Recommend {{num_recs}} products for the customer...
+    sampling_params:
+      temperature: 0.2
+    ```
+
+    <Note>
+      Only `CHUTES` and `OPEN_ROUTER` are accepted as providers. Models must cost less than $1 per million tokens.
+    </Note>
+  </Step>
+
+  <Step title="Upload to GitHub Gist">
+    Paste the artifact content into a new [GitHub Gist](https://gist.github.com/). The Gist must have exactly one commit — editing a Gist after creation adds a second commit and the platform will reject it.
+  </Step>
+
+  <Step title="Commit the Gist ID onchain">
+    Use the Bitrecs CLI to make an onchain commitment linking your hotkey to the Gist ID. The platform validates this commitment during submission.
+
+    ```bash
+    uv run bitrecs_cli.py upload \
+      --github-account mygithubaccount \
+      --gist-id your_gist_id \
+      --coldkey-name default \
+      --hotkey-name default
+    ```
+
+    <Info>
+      Submission can take up to one minute. Each hotkey may only have one active submission at a time.
+    </Info>
+  </Step>
+
+  <Step title="Platform API validation">
+    The platform API (`POST /submit`) performs a series of checks before accepting the artifact:
+
+    - Verifies the submission and transport signatures
+    - Confirms the hotkey is registered on the subnet
+    - Checks the Gist `created_at` timestamp matches the submission payload
+    - Validates the artifact structure against the template rules
+    - Confirms the onchain commitment is valid for the submitted Gist
+    - Runs a cosine similarity check against existing submissions to detect near-duplicates
+  </Step>
+
+  <Step title="Screener 1 evaluation">
+    A lightweight screener node pulls the artifact and runs a baseline ecommerce evaluation. Artifacts scoring below the **screener 1 threshold (0.3)** are rejected with status `failed_screening_1` and do not advance.
+
+    Artifacts that pass move to `screening_2` status.
+  </Step>
+
+  <Step title="Screener 2 evaluation">
+    A second screener runs an expanded evaluation set. Artifacts scoring below the **screener 2 threshold (0.4)** are rejected with status `failed_screening_2`.
+
+    Artifacts that pass move to `evaluating` status and enter the validator queue.
+
+    <Warning>
+      After full validator evaluation, artifacts must also exceed the **prune threshold (0.9)** — meaning they must score at least 90% of the top-performing artifact's score, or they are pruned from the scoring pool.
+    </Warning>
+  </Step>
+
+  <Step title="Validator evaluation">
+    Each validator registered with the platform polls `POST /validator/request-evaluation` and receives an evaluation assignment. The validator:
+
+    1. Loads the artifact YAML from the platform API
+    2. Retrieves an inference cost estimate for the miner's model and provider
+    3. Spawns an isolated Docker container running `bitrecs-evals`
+    4. Sends the artifact and problem parameters to the container's `/evaluate` endpoint
+    5. Collects the score, success flag, sample count, and inference cost report
+    6. Reports results back to the platform via `POST /validator/update-evaluation-run`
+
+    Evaluation runs have a maximum timeout of 600 seconds.
+  </Step>
+
+  <Step title="WTA scoring and weight assignment">
+    Once all evaluation runs for an artifact are finished, the scoring engine aggregates results:
+
+    - Scores are grouped by `hotkey + task_name`; the maximum score per group is taken to handle retries
+    - ε-Pareto dominance identifies non-dominated miners across all evaluation environments
+    - A subset scoring function applies priority based on the miner's first submission block
+    - A linear decay factor is applied: 5% per day after a 3-day grace period, with a floor of 25%
+    - The highest-scoring miner on the Pareto frontier receives a WTA weight onchain
+
+    Validators set weights approximately 30 blocks before each epoch boundary.
+  </Step>
+</Steps>
+
+## Screener thresholds
+
+| Stage | Threshold | Behavior on failure |
+|-------|-----------|---------------------|
+| Screener 1 | 0.3 | Artifact status set to `failed_screening_1` |
+| Screener 2 | 0.4 | Artifact status set to `failed_screening_2` |
+| Prune (post-validator) | 0.9 | Artifact removed from scoring pool |
+
+## What evaluations measure
+
+Evaluations test the artifact's ability to produce high-quality ecommerce product recommendations. Each evaluation run passes the artifact's prompt templates a simulated customer context, which includes:
+
+- **Viewing SKU** — the product the customer is currently viewing
+- **Cart items** — products already in the customer's cart
+- **Past orders** — historical purchase data
+- **Persona** — a generated customer profile with attributes
+- **Product catalog** — a pool of available products to recommend
+
+The artifact must output a valid JSON array of recommendation objects, each with `sku`, `name`, `price`, and `reason` fields. Evaluations check correctness (no duplicates, no cart items, gender consistency), relevance, and the quality of the reasoning provided.
+
+## Artifact status flow
+
+```
+screening_1 → failed_screening_1
+           ↘
+            screening_2 → failed_screening_2
+                       ↘
+                        evaluating → finished
+```
+
+## LLM providers
+
+Validators supply API keys for both supported providers. The artifact must declare exactly one.
+
+<Tabs>
+  <Tab title="CHUTES">
+    [CHUTES](https://chutes.ai) is a decentralized inference provider and the only provider accepted in miner artifacts. Validators configure `CHUTES_API_KEY` in their environment to run CHUTES-based inference.
+  </Tab>
+  <Tab title="OpenRouter (internal only)">
+    [OpenRouter](https://openrouter.ai) is used internally by the platform for cosine similarity embeddings (`qwen/qwen3-embedding-8b`). Validators configure `OPENROUTER_API_KEY` in their environment. Miners cannot use OpenRouter in submitted artifacts.
+  </Tab>
+</Tabs>
+
+## Decay and aging
+
+Scores incorporate a time-based decay factor calculated from the block at which a miner first submitted:
+
+- **Grace period**: 3 days — no decay applied
+- **Decay rate**: 5% per day after the grace period
+- **Floor**: 25% — scores never decay below 25% of their original weight
+
+This discourages miners from parking a single high-scoring artifact indefinitely and rewards continued iteration.

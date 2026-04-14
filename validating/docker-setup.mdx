@@ -1,0 +1,189 @@
+---
+title: "Run Bitrecs validator with Docker Compose"
+description: "Start, monitor, update, and stop the Bitrecs V2 validator using Docker Compose, with Watchtower handling automatic image updates."
+---
+
+The Bitrecs V2 validator runs as a Docker Compose stack consisting of two long-lived services — the validator itself and a Watchtower sidecar — plus a short-lived `bitrecs-evals` child container that the validator spawns on demand during each evaluation cycle. The Compose file is designed to be dropped into `~/bitrecs` alongside your `.env` file; no other configuration files are needed. This page covers the full lifecycle of the stack from first launch through routine operations and common troubleshooting.
+
+## The docker-compose-prod.yml file
+
+The production Compose file defines the two core services. Save it to `~/bitrecs/docker-compose-prod.yml`:
+
+```bash
+curl -L -o docker-compose-prod.yml \
+  "https://raw.githubusercontent.com/bitrecs/bitrecs-v2/refs/heads/main/validator/docker-compose-prod.yml"
+```
+
+```yaml
+services:
+  validator:
+    image: ghcr.io/bitrecs/bitrecs-v2:main
+    container_name: bitrecs-validator
+    restart: unless-stopped
+    privileged: true  # Allow DinD access
+    user: root  # Run as root for socket access
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ~/.bittensor/wallets:/root/.bittensor/wallets:ro
+      - ~/bitrecs/data:/app/data
+      - /var/log/bitrecs/validator:/var/log/bitrecs/validator
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    networks:
+      - bitrecs-network
+    command: ["uv", "run", "/app/validator/bitrecs_validator.py"]
+
+  watchtower:
+    image: nickfedor/watchtower
+    container_name: bitrecs-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+    command: --interval 120 bitrecs-validator
+
+networks:
+  bitrecs-network:
+    external: false
+```
+
+<Note>
+  The validator mounts the Docker socket (`/var/run/docker.sock`) so it can spawn the `bitrecs-evals` container at runtime. The `privileged: true` flag is required for this Docker-in-Docker access pattern.
+</Note>
+
+## Starting the stack
+
+Run this command from inside `~/bitrecs`:
+
+```bash
+docker compose -f docker-compose-prod.yml up -d
+```
+
+The `-d` flag detaches the process so the containers continue running after you close your terminal session.
+
+## Checking container status
+
+```bash
+docker ps
+```
+
+Under normal operation you will see two containers:
+
+| Container name | Image | Purpose |
+|---|---|---|
+| `bitrecs-validator` | `ghcr.io/bitrecs/bitrecs-v2:main` | Validator process |
+| `bitrecs-watchtower` | `nickfedor/watchtower` | Automatic image updates |
+
+During an active evaluation a third container appears temporarily:
+
+| Container name | Image | Purpose |
+|---|---|---|
+| `bitrecs-evals-*` | `ghcr.io/bitrecs/bitrecs-evals:main` | Isolated evaluation runner |
+
+This ephemeral container exits and is removed automatically when the evaluation completes. Its presence is expected, not an error.
+
+## Viewing logs
+
+Follow the live validator log stream:
+
+```bash
+docker compose -f docker-compose-prod.yml logs --tail 10 --follow validator
+```
+
+View recent Watchtower logs:
+
+```bash
+docker logs bitrecs-watchtower --tail 20
+```
+
+Press `Ctrl+C` to exit a live log stream without stopping the container.
+
+## Stopping the stack
+
+```bash
+docker compose -f docker-compose-prod.yml down
+```
+
+This stops and removes the containers but leaves volumes and images intact. Your wallet mounts and data directory are unaffected.
+
+## Watchtower automatic updates
+
+Watchtower is configured to poll every **120 seconds** and watch only the `bitrecs-validator` container. When a new image is pushed to `ghcr.io/bitrecs/bitrecs-v2:main`, Watchtower:
+
+1. Pulls the new image
+2. Stops and removes the running `bitrecs-validator` container
+3. Starts a replacement container with the same configuration
+4. Removes the old image (`WATCHTOWER_CLEANUP=true`)
+
+You do not need to run `docker pull` or restart the stack manually to apply updates.
+
+<Tip>
+  To force an immediate update without waiting for the 120-second poll, run `docker pull ghcr.io/bitrecs/bitrecs-v2:main` and then `docker compose -f docker-compose-prod.yml up -d --force-recreate validator`.
+</Tip>
+
+## Troubleshooting
+
+<AccordionGroup>
+
+  <Accordion title="bitrecs-validator exits immediately on startup">
+    The most common cause is a malformed or missing `.env` file. Check that `~/bitrecs/.env` exists and that all required variables are set. Run:
+
+    ```bash
+    docker logs bitrecs-validator
+    ```
+
+    Look for a `KeyError` or `ValidationError` near the end of the output, which will identify the problematic variable.
+  </Accordion>
+
+  <Accordion title="Permission denied on /var/run/docker.sock">
+    The validator requires access to the Docker socket. Ensure the socket exists and the current user has permission:
+
+    ```bash
+    ls -la /var/run/docker.sock
+    sudo usermod -aG docker $USER
+    ```
+
+    Log out and back in for the group change to take effect, then restart the stack.
+  </Accordion>
+
+  <Accordion title="Wallet not found inside the container">
+    The wallet is mounted read-only from `~/.bittensor/wallets` on the host. Verify the wallet exists at that path:
+
+    ```bash
+    ls ~/.bittensor/wallets/
+    ```
+
+    The `VALIDATOR_WALLET_NAME` and `VALIDATOR_HOTKEY_NAME` values in `.env` must exactly match the directory names under `~/.bittensor/wallets/`.
+  </Accordion>
+
+  <Accordion title="bitrecs-watchtower is not running">
+    If Watchtower exited, restart it individually:
+
+    ```bash
+    docker compose -f docker-compose-prod.yml up -d watchtower
+    ```
+
+    Confirm both containers are listed in `docker ps`.
+  </Accordion>
+
+  <Accordion title="bitrecs-evals container keeps running after evaluation">
+    The evaluation container should exit on its own. If it appears stuck, check its logs:
+
+    ```bash
+    docker logs $(docker ps -q --filter "name=bitrecs-evals")
+    ```
+
+    If it is genuinely hung, stop it manually:
+
+    ```bash
+    docker stop $(docker ps -q --filter "name=bitrecs-evals")
+    ```
+
+    The validator will spawn a fresh instance on the next evaluation cycle.
+  </Accordion>
+
+</AccordionGroup>

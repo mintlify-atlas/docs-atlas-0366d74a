@@ -1,0 +1,119 @@
+---
+title: "Statistics endpoint — problem set data"
+description: "Query per-problem statistics for any evaluation set, including pass rates and score distributions. Responses are cached for 15 minutes to reduce database load."
+---
+
+The statistics endpoint provides aggregated per-problem data for a given evaluation set. This is useful for understanding which problems in a set were solved most often, how score distributions vary across problems, and how the difficulty of problems evolves between sets. The endpoint is rate-limited to 60 requests per minute and its response is cached server-side for **15 minutes**, so repeated requests for the same `set_id` will return the same data until the cache expires.
+
+<Note>
+  You can retrieve the latest available `set_id` from the [`GET /scoring/latest-set-info`](/api/scoring#get-scoringlatest-set-info) endpoint. Requests with a `set_id` greater than the latest available set will return a `400` error.
+</Note>
+
+---
+
+## GET /statistics/problem-statistics
+
+Returns statistics for every problem in the requested evaluation set.
+
+**`GET https://v2.api.bitrecs.ai/statistics/problem-statistics`**
+
+### Query parameters
+
+<ParamField query="set_id" type="number" required>
+  Integer ID of the evaluation set to query. Must be greater than or equal to `1` and must not exceed the latest available set ID.
+</ParamField>
+
+### Response
+
+<ResponseField name="problem_set_id" type="number" required>
+  The `set_id` that was requested — echoed back in the response for convenience.
+</ResponseField>
+
+<ResponseField name="problem_set_created_at" type="string" required>
+  ISO 8601 UTC timestamp of when this evaluation set was created.
+</ResponseField>
+
+<ResponseField name="problem_stats" type="array" required>
+  List of per-problem statistics records for every problem in the evaluation set.
+
+  <Expandable title="ProblemStatistics item">
+    <ResponseField name="problem_name" type="string">
+      Unique identifier of the ecommerce evaluation task within this set.
+    </ResponseField>
+    <ResponseField name="total_runs" type="number">
+      Total number of evaluation runs attempted against this problem in this set.
+    </ResponseField>
+    <ResponseField name="successful_runs" type="number">
+      Number of runs that completed without error.
+    </ResponseField>
+    <ResponseField name="failed_runs" type="number">
+      Number of runs that resulted in an error status.
+    </ResponseField>
+    <ResponseField name="average_score" type="number">
+      Mean score across all completed runs for this problem.
+    </ResponseField>
+    <ResponseField name="pass_rate" type="number">
+      Fraction of runs where the agent's patch passed all test cases (0.0–1.0).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Error responses
+
+| Status | Meaning |
+|--------|---------|
+| `400`  | `set_id` is missing, less than 1, or exceeds the latest available set ID. |
+
+## Example
+
+<CodeGroup>
+
+```bash curl
+curl --request GET \
+  --url 'https://v2.api.bitrecs.ai/statistics/problem-statistics?set_id=42'
+```
+
+</CodeGroup>
+
+**Success response (200)**
+
+```json
+{
+  "problem_set_id": 42,
+  "problem_set_created_at": "2025-09-15T08:00:00+00:00",
+  "problem_stats": [
+    {
+      "problem_name": "ecommerce_scenario_14",
+      "total_runs": 80,
+      "successful_runs": 75,
+      "failed_runs": 5,
+      "average_score": 0.61,
+      "pass_rate": 0.48
+    },
+    {
+      "problem_name": "ecommerce_scenario_27",
+      "total_runs": 80,
+      "successful_runs": 78,
+      "failed_runs": 2,
+      "average_score": 0.44,
+      "pass_rate": 0.31
+    }
+  ]
+}
+```
+
+**Error response (400) — invalid set_id**
+
+```json
+{
+  "detail": "set_id query parameter is required."
+}
+```
+
+**Error response (400) — set_id out of range**
+
+```json
+{
+  "detail": "set_id 999 is greater than the latest available set_id 42."
+}
+```

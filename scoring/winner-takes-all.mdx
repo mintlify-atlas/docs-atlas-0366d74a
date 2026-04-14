@@ -1,0 +1,168 @@
+---
+title: "Winner-takes-all scoring in Bitrecs V2"
+description: "How subset scores, Z-score thresholds, and first-commit priority combine to select a single winning miner and convert scores to onchain weights."
+---
+
+Once the Pareto frontier has been computed, Bitrecs V2 applies winner-takes-all (WTA) scoring to determine which frontier miner receives onchain weight. The algorithm evaluates every possible combination of task environments (every non-empty subset), finds a winner for each subset, accumulates points by subset size, and converts the final point totals into normalized weights via softmax. Only one miner — the one with the highest resulting weight — has `set_weights` called in their favour.
+
+## Algorithm overview
+
+<Steps>
+  <Step title="Enumerate subsets">
+    For every non-empty subset `S` of the active task environments — from singletons up to the full set — the engine identifies which frontier miner wins on `S`.
+  </Step>
+
+  <Step title="Score subsets by size">
+    Each subset contributes points equal to its size (the default `LINEAR` scheme). A subset of 3 environments awards 3 points to its winner. Larger subsets therefore matter more.
+
+    ```python
+    # scoring/wta.py
+    match subset_weight_scheme:
+        case SubsetWeightScheme.LINEAR:
+            subset_weight = float(subset_size)
+        case SubsetWeightScheme.EXPONENTIAL:
+            subset_weight = float(2 ** (subset_size - 1))
+        case SubsetWeightScheme.EQUAL:
+            subset_weight = 1.0
+    ```
+  </Step>
+
+  <Step title="Find each subset winner">
+    For each subset, eligible miners are ranked by their total score across environments in the subset. The top-ranked miner wins if they clearly beat the runner-up's threshold on a majority of environments. Otherwise the tie is broken by first-commit block (earlier = wins).
+  </Step>
+
+  <Step title="Accumulate and convert to weights">
+    Each miner's subset points are summed. The resulting scores are passed through `scores_to_weights`, which applies softmax normalization to produce weights that sum to 1.
+  </Step>
+</Steps>
+
+## Threshold computation
+
+A "clear win" over the runner-up is determined by `compute_miner_thresholds`, which computes per-miner, per-environment thresholds based on a Z-score confidence band:
+
+```python
+# scoring/threshold.py
+def calculate_threshold(
+    prior_score: float,
+    sample_count: int,
+    z_score: float = DEFAULT_Z_SCORE,   # 1.5
+    min_gap: float = MIN_THRESHOLD_GAP, # 0.02
+    max_gap: float = MAX_THRESHOLD_GAP, # 0.08
+) -> float:
+    p = max(0.01, min(0.99, prior_score))
+    se = math.sqrt(p * (1.0 - p) / sample_count)
+    gap = z_score * se
+    gap = max(gap, min_gap)
+    gap = min(gap, max_gap)
+    return min(prior_score + gap, 1.0)
+```
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `DEFAULT_Z_SCORE` | `1.5` | Confidence multiplier applied to the standard error |
+| `MIN_THRESHOLD_GAP` | `0.02` | A later miner must beat the earlier by at least 2 pp |
+| `MAX_THRESHOLD_GAP` | `0.08` | Gap is capped at 8 pp regardless of sample size |
+
+<Info>
+  More evaluation samples reduce the standard error, which shrinks the threshold gap (down to the 2 pp floor). A well-sampled subnet makes it easier for a genuinely superior miner to claim a win.
+</Info>
+
+## Subset winner selection
+
+`find_subset_winner_score_first` implements the per-subset decision:
+
+```python
+# scoring/wta.py
+def find_subset_winner_score_first(
+    miner_scores: MinerScores,
+    miner_thresholds: MinerThresholds,
+    miner_first_blocks: MinerFirstBlocks,
+    subset: tuple[EnvironmentId, ...],
+) -> MinerUID | None:
+    eligible = [
+        u for u in miner_scores
+        if any(miner_scores[u].get(e, 0.0) > 0.0 for e in subset)
+    ]
+    if not eligible:
+        return None
+    if len(eligible) == 1:
+        return eligible[0]
+
+    def subset_score(uid):
+        return sum(miner_scores[uid].get(e, 0.0) for e in subset)
+
+    # Sort by score descending first, then block ascending as secondary
+    ranked = sorted(
+        eligible,
+        key=lambda u: (-subset_score(u), miner_first_blocks.get(u, float("inf")))
+    )
+
+    leader    = ranked[0]
+    runner_up = ranked[1]
+
+    n_subset = len(subset)
+    majority = (n_subset + 1) // 2  # ceil(n/2)
+
+    wins_over_runner_up = sum(
+        1 for env in subset
+        if miner_scores[leader].get(env, 0.0)
+        > miner_thresholds[runner_up].get(env, miner_scores[runner_up].get(env, 0.0) + MIN_THRESHOLD_GAP)
+    )
+    leader_is_clear = wins_over_runner_up >= majority
+
+    if leader_is_clear:
+        return leader
+
+    # Statistical tie: first committed block decides
+    return min(
+        [leader, runner_up],
+        key=lambda u: (miner_first_blocks.get(u, float("inf")), u)
+    )
+```
+
+<Note>
+  First-commit advantage only applies when the score difference between leader and runner-up is within the statistical threshold band. A miner with a clear score advantage always wins regardless of block order.
+</Note>
+
+## Converting scores to weights
+
+Once all subset points are accumulated, `scores_to_weights` applies temperature-scaled softmax:
+
+```python
+# scoring/wta.py
+def scores_to_weights(
+    scores: dict[MinerUID, float],
+    temperature: float = 1.0,
+    min_weight: float = 0.0,
+) -> dict[MinerUID, float]:
+    uids = list(scores.keys())
+    values = np.array([scores[uid] for uid in uids])
+
+    if np.all(values == 0):
+        n = len(uids)
+        return {uid: 1.0 / n for uid in uids}
+
+    # Softmax with temperature (shifted for numerical stability)
+    values_shifted = values - np.max(values)
+    exp_values = np.exp(values_shifted / temperature)
+    weights = exp_values / exp_values.sum()
+
+    return {uid: float(w) for uid, w in zip(uids, weights, strict=True)}
+```
+
+The miner with the highest weight is the WTA winner:
+
+```python
+# scoring/engine.py
+weight_receiving_uid = max(weights, key=weights.get)
+```
+
+## Inspecting WTA results
+
+The `/scoring/wta` endpoint exposes the current subset scores, weights, and per-subset winners for the active evaluation set:
+
+```bash
+GET /scoring/wta
+```
+
+The response includes `weights`, `subset_scores`, `miner_thresholds`, `miner_blocks`, and a sample of `subset_winners` keyed by subset tuple string.

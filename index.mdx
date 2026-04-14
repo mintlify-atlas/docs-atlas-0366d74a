@@ -1,97 +1,64 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Bitrecs V2: Prompt Evolution Subnet on Bittensor"
+description: "Bitrecs V2 is a Bittensor subnet where miners compete by optimizing LLM prompts for ecommerce recommendations. The best artifact earns onchain emissions."
 ---
 
-## Setting up
+Bitrecs V2 is a prompt evolution subnet on Bittensor that rewards miners who craft the most effective LLM prompts for ecommerce recommendation tasks. Miners submit `artifact.yaml` files — containing prompts, models, and sampling parameters — which are evaluated against a rotating set of real-world ecommerce scenarios. The top-performing artifact earns Bittensor emissions through a winner-takes-all scoring engine.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Start mining" icon="pickaxe" href="/mining/quickstart">
+    Submit your first artifact and begin earning emissions on the Bitrecs subnet.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Run a validator" icon="server" href="/validating/quickstart">
+    Set up a validator node to evaluate miner submissions and participate in scoring.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="How it works" icon="diagram-project" href="/how-it-works">
+    Understand the prompt evolution lifecycle, evaluation pipeline, and scoring mechanics.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="API Reference" icon="code" href="/api/check">
+    Explore the Bitrecs V2 REST API for submissions, scoring, and inference.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What is Bitrecs?
 
-Everything you need to create world-class documentation.
+Bitrecs is an ecommerce recommendation engine powered by Bittensor. Merchants use the Bitrecs widget to drive personalized customer journeys and increase average order values. The quality of recommendations is continuously improved by miners competing to optimize LLM prompts through the Bitrecs V2 subnet.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+<Steps>
+  <Step title="Acquire a hotkey">
+    Register a fresh hotkey on the Bitrecs subnet (Netuid 122 for mainnet, 296 for testnet) using `btcli`.
+  </Step>
+  <Step title="Create an artifact">
+    Author an `artifact.yaml` containing your system prompt, user prompt, model choice, and sampling parameters. Upload it as a single-commit GitHub Gist.
+  </Step>
+  <Step title="Submit via CLI">
+    Run the Bitrecs CLI to make an onchain commitment and submit your artifact for evaluation.
+    ```bash
+    uv run bitrecs_cli.py upload \
+      --github-account your-account \
+      --gist-id your-gist-id \
+      --coldkey-name default \
+      --hotkey-name default
+    ```
+  </Step>
+  <Step title="Earn emissions">
+    Your artifact enters the evaluation pipeline — two screeners and multiple validator runs. If your artifact dominates the Pareto frontier and wins the WTA scoring round, you earn onchain emissions.
+  </Step>
+</Steps>
 
-## Need inspiration?
+## Key concepts
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<CardGroup cols={2}>
+  <Card title="Artifact reference" icon="file-code" href="/mining/artifact-reference">
+    Learn every field in the artifact.yaml format, including required fields and template variables.
+  </Card>
+  <Card title="Scoring mechanics" icon="trophy" href="/scoring/overview">
+    Understand how Pareto dominance, WTA scoring, and time-decay combine to determine emissions.
+  </Card>
+  <Card title="Submission process" icon="upload" href="/mining/submission-process">
+    Step-by-step guide to onchain commitment, validation, and artifact submission.
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    See how the API, validators, evaluators, and Bittensor network fit together.
+  </Card>
+</CardGroup>

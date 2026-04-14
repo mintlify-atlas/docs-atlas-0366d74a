@@ -1,0 +1,117 @@
+---
+title: "POST /check — validate miner submission"
+description: "Validate a miner's artifact before committing to the chain. Runs all eligibility and format checks without persisting data."
+---
+
+The `/check` endpoint lets miners verify that their submission will pass every validation gate before they commit a Gist hash to the Bittensor chain. It performs the same checks as `/submit` but writes nothing to the database, making it safe to call repeatedly during development. A successful response means the artifact is ready to submit; any error explains exactly which check failed.
+
+<Warning>
+  Both the `/check` and `/submit` endpoints are rate-limited to **30 requests per minute** per IP. The system must also have submissions enabled and at least the minimum number of connected validators before a request is processed.
+</Warning>
+
+## Request
+
+**`POST https://v2.api.bitrecs.ai/check`**
+
+### Body
+
+<ParamField body="created_at" type="string" required>
+  ISO 8601 timestamp that matches the `created_at` field of the GitHub Gist. The server fetches the Gist and rejects the request if the timestamps do not match exactly.
+</ParamField>
+
+<ParamField body="github_account" type="string" required>
+  The GitHub username that owns the Gist containing the agent artifact.
+</ParamField>
+
+<ParamField body="gist_id" type="string" required>
+  The GitHub Gist ID (hex string) that contains the YAML artifact to validate.
+</ParamField>
+
+<ParamField body="hotkey" type="string" required>
+  The miner's Bittensor SS58 hotkey address. Must be registered on the subnet and must match the `miner_hotkey` field inside the artifact YAML.
+</ParamField>
+
+<ParamField body="signature" type="string" required>
+  Ed25519 signature of the submission payload, produced by signing with the miner's hotkey private key. Used to verify that the request originates from the stated hotkey.
+</ParamField>
+
+## Validation checks performed
+
+The server runs the following checks in order. The first failure returns an error immediately.
+
+1. **Submissions enabled** — the system-wide submissions flag must be on.
+2. **Minimum validators** — at least the configured number of validators must be connected.
+3. **Rate limit** — global rate limit must not be exceeded.
+4. **Signature** — `signature` field must be a valid Ed25519 signature over the submission body.
+5. **Hotkey format** — `hotkey` must be a valid SS58 address.
+6. **Not a validator** — the hotkey must not belong to a validator on the subnet.
+7. **Hotkey not already used** — the hotkey must not have an existing approved agent in this evaluation cycle.
+8. **Gist not already used** — the Gist ID must not have been submitted before.
+9. **Hotkey not banned** — the hotkey must not be on the banned list.
+10. **Hotkey registered** — the hotkey must be registered on the Bittensor subnet.
+11. **Gist fetch and parse** — the Gist must be readable and parse as valid agent YAML.
+12. **`agent_id` not pre-set** — the YAML must not contain a pre-set `agent_id` field.
+13. **Artifact template valid** — the artifact must pass structural rule validation.
+14. **`created_at` match** — `created_at` in the request body must equal the Gist creation timestamp.
+15. **Hotkey match** — `hotkey` in the request body must match `miner_hotkey` in the artifact YAML.
+
+## Response
+
+<ResponseField name="status" type="string" required>
+  `"success"` when all checks pass.
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Human-readable confirmation, e.g. `"Agent check successful"`.
+</ResponseField>
+
+## Error responses
+
+| Status | Meaning |
+|--------|---------|
+| `400`  | Validation failed — see the `error` field in the response body for the specific reason. |
+| `503`  | Service unavailable — submissions are disabled or not enough validators are connected. |
+
+## Example
+
+<CodeGroup>
+
+```bash curl
+curl --request POST \
+  --url https://v2.api.bitrecs.ai/check \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "created_at": "2025-10-01T12:00:00+00:00",
+    "github_account": "my-github-user",
+    "gist_id": "abc123def456abc123def456abc12345",
+    "hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "signature": "0x1a2b3c..."
+  }'
+```
+
+</CodeGroup>
+
+**Success response (200)**
+
+```json
+{
+  "status": "success",
+  "message": "Agent check successful"
+}
+```
+
+**Error response (400)**
+
+```json
+{
+  "error": "created_at timestamp does not match Gist creation time"
+}
+```
+
+**Error response (503)**
+
+```json
+{
+  "detail": "Submissions are currently disabled. Please try again later."
+}
+```

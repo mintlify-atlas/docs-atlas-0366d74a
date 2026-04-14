@@ -1,0 +1,167 @@
+---
+title: "Bitrecs V2 system architecture"
+description: "An overview of the Bitrecs V2 components: the platform API, validator nodes, screener nodes, the bitrecs-evals container, PostgreSQL, and Cloudflare R2."
+keywords: ["bitrecs", "architecture", "fastapi", "validator", "screener", "docker", "postgresql", "cloudflare r2", "bittensor"]
+---
+
+Bitrecs V2 is built around a central platform API that coordinates between miners submitting artifacts, screener nodes doing rapid pre-filtering, and validator nodes running full ecommerce evaluations inside isolated Docker containers. All persistent state lives in a PostgreSQL database backed by Cloudflare R2 for artifact storage. Validators never hold canonical state — they rely on the platform API for assignments, score reporting, and weight-setting decisions. This separation means validators can be added or removed without disrupting active evaluation queues.
+
+## Component overview
+
+<CardGroup cols={2}>
+  <Card title="Platform API" icon="server">
+    A FastAPI application (`api/main.py`) deployed at `https://v2.api.bitrecs.ai`. Accepts miner submissions, manages the evaluation queue, serves evaluation assignments to validators and screeners, and exposes scoring data. Requires an API key for all protected endpoints.
+  </Card>
+  <Card title="Bittensor chain" icon="link">
+    Miners commit their Gist IDs onchain before submitting to the platform. Validators read miner UIDs and coldkeys from the chain and set WTA weights onchain each epoch via `subtensor.set_weights()`.
+  </Card>
+  <Card title="Validator nodes" icon="shield-check">
+    Long-running Python processes (`validator/bitrecs_validator.py`) deployed via Docker Compose. Validators register with the platform, poll for evaluation assignments, spawn `bitrecs-evals` containers to run inference and scoring, and report results back. Each validator also runs a score calculation loop that sets onchain weights near epoch boundaries.
+  </Card>
+  <Card title="Screener nodes" icon="filter">
+    The same validator binary running in `MODE=screener`. Screeners are lighter-weight nodes that evaluate artifacts through the first two screening stages before they reach full validator evaluation. Screeners authenticate with a shared password rather than a hotkey signature.
+  </Card>
+  <Card title="bitrecs-evals" icon="flask">
+    A separate Docker image (`ghcr.io/bitrecs/bitrecs-evals:main`) that runs inside each validator during evaluation. Exposes an HTTP `/evaluate` endpoint that accepts an artifact YAML and problem parameters, runs the LLM prompt against the evaluation suite, and returns a score, success flag, sample count, and inference cost report.
+  </Card>
+  <Card title="PostgreSQL + Cloudflare R2" icon="database">
+    The platform database stores agents, evaluation runs, scores, hotkey-to-Gist mappings, and weight history. Cloudflare R2 holds artifact backups and is synced to validators periodically via the `R2_SYNC_INTERVAL_SECONDS` loop (default: 900 seconds).
+  </Card>
+</CardGroup>
+
+## Platform API
+
+The API is built with [FastAPI](https://fastapi.tiangolo.com/) and deployed at:
+
+```
+https://v2.api.bitrecs.ai
+```
+
+All requests require an `X-API-Key` header. The API exposes the following router groups:
+
+| Prefix | Purpose |
+|--------|---------|
+| `/` and `/check`, `/submit` | Miner submission endpoints (CLI-facing) |
+| `/validator` | Validator and screener registration, heartbeat, evaluation assignment, result reporting |
+| `/scoring` | Score retrieval, weight-set recording, latest set info |
+| `/agent` | Agent (artifact) CRUD |
+| `/evaluation-run` | Evaluation run status and logs |
+| `/evaluation` | Individual evaluation results |
+| `/evaluation-sets` | Evaluation set management |
+| `/retrieval` | Miner block and score data for weight calculation |
+| `/inference` | Cost estimation and inference cost reporting |
+| `/statistics`, `/dashboard` | Aggregate metrics |
+| `/backup` | R2 backup operations |
+| `/debug` | Internal diagnostics |
+
+### Key startup tasks
+
+When the API starts, it:
+
+1. Initializes the PostgreSQL connection pool
+2. Validates the Cloudflare R2 bucket connection
+3. Starts a validator heartbeat timeout loop (disconnects validators that stop sending heartbeats)
+4. Starts an R2 download-and-sync background task
+5. Loads API keys from the database
+6. Pre-caches inference cost data for all supported providers
+
+## Validator architecture
+
+Validators run as Docker containers alongside a `bitrecs-evals` sidecar container. A [Watchtower](https://containrrr.dev/watchtower/) container handles automatic image updates.
+
+```
+~/bitrecs/
+└── docker-compose-prod.yml   # Defines validator + watchtower services
+```
+
+The validator process runs three concurrent async loops:
+
+| Loop | Interval | Purpose |
+|------|----------|---------|
+| Heartbeat | `SEND_HEARTBEAT_INTERVAL_SECONDS` (default: 20s) | Keeps the session alive with the platform |
+| Score calculation | `SET_WEIGHTS_INTERVAL_SECONDS` (default: 300s) | Calculates scores and sets onchain weights near epoch boundaries |
+| R2 sync | `R2_SYNC_INTERVAL_SECONDS` (default: 900s) | Syncs artifact data from Cloudflare R2 |
+
+In addition, the main loop continuously polls `/validator/request-evaluation` and runs evaluations as they are assigned.
+
+### Evaluation run states
+
+Each evaluation run transitions through the following states, reported to the platform API:
+
+```
+pending → initializing_agent → running_agent → initializing_eval → running_eval → finished
+                                                                               ↘ error
+```
+
+### Validator vs. screener roles
+
+| Attribute | Validator | Screener |
+|-----------|-----------|----------|
+| Authentication | Hotkey signature (SS58) | Shared password |
+| Sets onchain weights | Yes | No |
+| Runs score calculation loop | Yes | No |
+| Runs R2 sync loop | Yes | No |
+| Runs evaluations | Yes | Yes |
+| Evaluation stage | Full validator queue | Screener 1 and 2 |
+
+## bitrecs-evals container
+
+During each evaluation run, the validator:
+
+1. Pulls the `bitrecs-evals` image (`ghcr.io/bitrecs/bitrecs-evals:main`) if not already present
+2. Starts the container with environment variables including `BITRECS_RUN_ID`, `OPENROUTER_API_KEY`, `CHUTES_API_KEY`, and model cost parameters
+3. Confirms the container is healthy via `GET /health`
+4. Posts the artifact YAML and problem name to `POST /evaluate` with a 600-second timeout
+5. Retrieves the run log from `GET /run_log/{run_id}`
+6. Cleans up the container after the run completes
+
+The container communicates over an internal Docker network (`bitrecs-network`). When running outside Docker, the hostname is `localhost`; inside Docker, it is `bitrecs-evals-main`.
+
+## Data flow diagram
+
+```
+Miner (CLI)
+    │
+    ├─ POST /check          ← Dry-run validation (no DB write)
+    └─ POST /submit         ← Artifact stored in PostgreSQL
+                                    │
+                            Screener 1 polls /validator/request-evaluation
+                                    │
+                            Screener 1 runs eval (bitrecs-evals container)
+                                    │
+                            Score < 0.3? → failed_screening_1
+                                    │
+                            Screener 2 polls /validator/request-evaluation
+                                    │
+                            Screener 2 runs eval (bitrecs-evals container)
+                                    │
+                            Score < 0.4? → failed_screening_2
+                                    │
+                            Validator(s) poll /validator/request-evaluation
+                                    │
+                            Validator runs eval (bitrecs-evals container)
+                                    │
+                            Results posted to /validator/update-evaluation-run
+                                    │
+                            Scoring engine aggregates → WTA winner selected
+                                    │
+                            subtensor.set_weights() called onchain
+```
+
+## Infrastructure requirements
+
+<Tabs>
+  <Tab title="Validators">
+    - Ubuntu 24+ LTS recommended
+    - Docker installed (for `bitrecs-evals` container spawning)
+    - No public IP or open inbound ports required — all communication is outbound to the platform API
+    - `OPENROUTER_API_KEY` and/or `CHUTES_API_KEY` required for inference
+    - Bittensor wallet with a registered hotkey on the target netuid
+  </Tab>
+  <Tab title="Platform API">
+    - PostgreSQL database
+    - Cloudflare R2 bucket
+    - Environment variables for subtensor connection, R2 credentials, screener thresholds, and validator timeouts (see `api/.env.example`)
+    - Run with: `uv run uvicorn api.main:app --access-log --log-level debug`
+  </Tab>
+</Tabs>

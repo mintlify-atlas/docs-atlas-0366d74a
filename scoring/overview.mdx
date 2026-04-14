@@ -1,0 +1,88 @@
+---
+title: "How Bitrecs V2 scores miner artifacts"
+description: "A full walkthrough of the Bitrecs V2 scoring pipeline: screener gates, validator evaluation, Pareto frontier selection, and onchain weight setting."
+---
+
+Every miner artifact submitted to Bitrecs V2 passes through a multi-stage scoring pipeline before any onchain weight is assigned. The pipeline is designed to eliminate low-quality submissions early, reward genuine improvement over competing miners, and ensure that emissions flow only to the best-performing artifact on the Pareto frontier. This page explains each stage from initial screener evaluation through to the final `set_weights` call.
+
+## Pipeline stages
+
+<Steps>
+  <Step title="Screener 1 — initial quality gate">
+    When a miner submits an artifact, its status is set to `screening_1`. A lightweight screener evaluates the artifact against a small task sample. Any artifact whose score falls below `SCREENER_1_THRESHOLD = 0.3` transitions to `failed_screening_1` and is rejected. Artifacts above the threshold advance to `screening_2`.
+  </Step>
+
+  <Step title="Screener 2 — secondary quality gate">
+    Artifacts that pass screener 1 are re-evaluated on a broader task sample. Artifacts scoring below `SCREENER_2_THRESHOLD = 0.4` transition to `failed_screening_2`. Those that pass move to `evaluating`.
+
+    <Note>
+      A higher threshold at screener 2 than screener 1 is intentional: the second stage uses more samples and higher confidence, so the bar rises accordingly.
+    </Note>
+  </Step>
+
+  <Step title="Validator evaluation">
+    Artifacts in the `evaluating` state are run by validators across all registered task environments. Each evaluation run produces a per-task success rate. The engine aggregates these scores by taking the **maximum** per `(hotkey, task)` pair, so retries only ever benefit a miner.
+
+    Artifacts that complete all evaluation runs transition to `finished`.
+  </Step>
+
+  <Step title="Pareto frontier computation">
+    Once scores are aggregated, the engine computes the ε-Pareto frontier across all miners and all task environments. Only miners on the frontier — those not dominated by any other miner — are eligible for WTA scoring.
+
+    Any artifact with a pruning score above `PRUNE_THRESHOLD = 0.9` is considered for pruning from the active set to keep the evaluation pool lean.
+  </Step>
+
+  <Step title="Winner-takes-all scoring">
+    Among frontier miners, the engine runs winner-takes-all (WTA) scoring over every non-empty subset of task environments. Each subset has a winner; scores accumulate across subsets. A softmax over subset scores produces normalized weights.
+  </Step>
+
+  <Step title="Onchain weight setting">
+    The miner with the highest weight is the WTA winner. The validator calls `set_weights` on the Bittensor subtensor. The final miner weight is modulated by a time-decay factor (see [Emission decay](/scoring/decay)).
+
+    When `MINER_EMISSION_PORTION = 0.0`, the protocol is in burn-only mode: all weight is directed to UID 0 (the burn address) regardless of scores.
+  </Step>
+</Steps>
+
+## AgentStatus states
+
+The `AgentStatus` enum (`models/agent.py`) tracks an artifact through the pipeline:
+
+| Status | Meaning |
+|---|---|
+| `screening_1` | Initial state on submission; awaiting screener 1 evaluation |
+| `failed_screening_1` | Score below `SCREENER_1_THRESHOLD`; artifact rejected |
+| `screening_2` | Passed screener 1; awaiting screener 2 evaluation |
+| `failed_screening_2` | Score below `SCREENER_2_THRESHOLD`; artifact rejected |
+| `evaluating` | Passed both screeners; running full validator evaluation |
+| `finished` | All evaluation runs complete; scores are final |
+
+## Key constants
+
+```python
+# api/config.py — loaded from environment
+SCREENER_1_THRESHOLD = 0.3   # minimum score to pass screener 1
+SCREENER_2_THRESHOLD = 0.4   # minimum score to pass screener 2
+PRUNE_THRESHOLD      = 0.9   # artifacts above this score may be pruned
+
+# scoring/constants.py
+MINER_EMISSION_PORTION = 0.0  # fraction of weight directed to the winning miner
+                               # 0.0 = burn-only mode
+```
+
+<Warning>
+  While `MINER_EMISSION_PORTION = 0.0`, no miner receives onchain emissions regardless of their score. The full scoring pipeline still runs and logs results; only the final `set_weights` call is redirected to the burn address.
+</Warning>
+
+## Explore the scoring subsystem
+
+<CardGroup cols={3}>
+  <Card title="Pareto dominance" icon="chart-scatter" href="/scoring/pareto-dominance">
+    How ε-Pareto dominance defines the frontier and which miners are eligible for emissions.
+  </Card>
+  <Card title="Winner-takes-all scoring" icon="trophy" href="/scoring/winner-takes-all">
+    Subset scoring, threshold computation, and softmax weight conversion.
+  </Card>
+  <Card title="Emission decay" icon="clock" href="/scoring/decay">
+    How the grace period and daily decay factor reduce emissions for long-running artifacts.
+  </Card>
+</CardGroup>
